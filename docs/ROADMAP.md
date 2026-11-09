@@ -21,3 +21,11 @@
 - [ ] macOS(CoreAudio)에서 입력 캡처 → RTP 송신 프로토타입
 - [ ] SAP 송신으로 스트림 광고
 - [ ] Return(수신 → 가상 출력) 경로 설계: 가상 사운드카드 방식 결정(예: BlackHole 같은 가상 장치 연동 vs 자체 드라이버)
+
+## M4. Dante 장비 제어
+참고: [chris-ritsen/network-audio-controller](https://github.com/chris-ritsen/network-audio-controller) (Unlicense, Python/Rust). 코드를 그대로 가져오지 않고 프로토콜 동작을 참고해 JS로 구현한다.
+- [ ] 참고 저장소 소스 분석 문서 작성 (탐지, 라우팅·구독, 레벨 미터·클럭 통계, AES67 설정 부분) — 분석 후 `docs/`에 정리
+- [ ] Dante 장비 탐지·목록 표시 (읽기 전용)
+- [ ] 채널 구독(라우팅) 추가·삭제
+- [ ] 장비 설정(이름, 샘플레이트, 레이턴시, AES67 모드 등)
+- [ ] M2의 레벨 미터·통계 구현 시 위 저장소의 미터링·통계 방식을 참고
