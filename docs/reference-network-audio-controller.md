@@ -82,8 +82,52 @@
 - 미터링 프레임(`build_metering_frame`, 프로토콜 `0xFFFF`): 0(2), 소스 EUI-64(8), ASCII `Audinate`(8), 버전 `2`(1), TX 채널 수(1), RX 채널 수(1), TX 레벨(N), RX 레벨(M), 0(1). 레벨 값 해석은 5절. 시퀀스는 헤더의 message id에 담긴다.
 - 주의: 이 코드는 장비 흉내(에뮬레이터)용 빌더 성격이 강해 수신 쪽 파서(`parse_response("metering")`, `conmon_common.rs`)와 함께 읽어야 한다. 실장비 캡처로 필드 위치를 확인할 것.
 
-## 10. 확인하지 못한 것
-- 위 패킷 레이아웃은 소스상 정의이며 실장비 캡처와 대조하지 않았다.
-- 구독 응답에서 상태 코드(`subscription_status.rs`)가 각 값에 대해 의미하는 전체 표.
-- 장비 설정(샘플레이트·레이턴시 등)의 opcode와 레이아웃(`commands/settings.rs`, `device.rs`).
-- 문서 내용 전부의 실장비 동작.
+## 10. 전체 검토 결과와 필요 여부
+전체 저장소(코어 Rust, Python 레이어, 데몬, 웹 UI, 문서)를 3개 영역으로 나눠 읽고 판정했다. 아래 오프셋·opcode 중 `0x8020/0x8204/0x8060/0x0063`(장치 설정 info code), 하트비트 `0x8000/0x8003/0x8004`, 오프라인 임계값 15초, `0x3201`(외부 구독), `0x2601`(TX flow 생성)은 소스에서 다시 확인했다. 나머지는 읽기 담당이 정리한 것이라 구현 전에 소스와 캡처로 재확인한다.
+
+### NEEDED (M4 / M2에 직접 필요)
+- **장치 설정 읽기**: ARC `0x1100`, info code 표 — 샘플레이트 `0x8020`, 기본 지연 `0x8204`, 설정 지연 `0x8205`, 활성 지연 `0x8301`, 최대/최소 `0x8302`/`0x8306`, AES67 multicast prefix `0x8060`, AES67 configured `0x0063`(3=켜짐, 1=꺼짐). 응답은 [0]=용량 [1]=개수 뒤에 4바이트 레코드이며, 최상위 비트가 켜진 코드는 패킷 시작 기준 포인터다(`responses/device.rs`).
+- **채널·장치 정보 파싱**: `0x1000` 채널 수, `0x1003` 장치 정보, RX 레코드(20바이트, 페이지당 16개), TX 레코드(8바이트, 페이지당 32개)(`parser.rs`).
+- **구독 상태 코드표**: `subscription_status.rs`의 코드→라벨·설명 표(동적 연결, 자기 구독, 포맷·자원·QoS·지연·클럭 도메인 오류, 접근 제어 등). UI에 그대로 쓸 가치가 있어 이식 후보 1순위.
+- **장치 모델·기능 마스크**: 요청으로 모델 조회 후 기능 비트로 게이팅(AES67 지원, 잠금, 상세 미터링, 이중화 등). 지원하지 않는 장치에 쓰기를 보내지 않기 위해 필요.
+- **AES67 모드 제어**: 읽기는 `probe_aes67` 알림(`0x1007`, 비트0=현재, 비트1=설정). 현재≠설정이면 "재부팅 필요"로 표시. AES67 상태가 바뀌면 샘플레이트·인코딩을 다시 조회하는 연쇄가 필요. multicast prefix 쓰기는 ARC `0x1101`.
+- **구독 변경 절차**(`subscription_operations.py`): 현재 상태 재조회 → 변경 계획 → 장치별 잠금 → 페이지 전송과 ACK 확인 → 알림 최대 2초 대기 → 0.5초 간격 최대 5초 폴링으로 일치 확인. 결과를 verified/failures/unconfirmed로 구분한다. 롤백은 없다.
+- **외부 AES67 소스 구독**(`external_subscription.rs`, ARC `0x3201`, 기본 포트 4321): SAP로 본 AES67 소스를 Dante 수신기에 구독시킨다. 우리 앱의 SAP 목록과 직접 연결되는 기능.
+- **생존 판정**: mDNS는 발견용이고 online/offline은 하트비트(포트 8708)로 판정한다. 오프라인 임계값 15초, 점검 주기 5초. CMC 등록을 약 10초마다 갱신한다(등록해야 알림·하트비트가 계속 온다고 보이나 코드로 확정하지 못함).
+- **하트비트 통계(M2/PTP 패널 참고)**: `0x8000` 인터페이스 트래픽(엔트리 16바이트: tx·rx B/s, tx·rx 오류 누적), `0x8003` flow 지연, `0x8004` late packet, `0x8001` 클럭 오프셋(ppb). 클럭 상태 읽기는 ConMon `0x0020`(동기 상태, 소스, ppb 등).
+- **SDP/SAP 처리**: `sdp.rs`의 routable 판정(audio, RTP/AVP, IPv4 `c=` 1~2개, L16/L24/L32, ptime, `mediaclk direct`, `ts-refclk` PTP 도메인)과 `sap.rs`의 Added/Refreshed/Replaced/Deleted 전이를 `src/lib/sdp.js` 개선에 참고.
+- **장치 이름·채널 이름 변경**: 장치 `0x1001`, TX 채널 `0x2013`, RX 채널 `0x3001`(`0x2809`는 `0x3401`). 규칙: 최대 31자, `[A-Za-z0-9-]`, 하이픈으로 시작·끝 불가(채널 이름은 `:`·`_` 허용).
+- **잠금 상태 읽기**: 쓰기 전에 장치가 잠겼는지 확인(ConMon `0x1008`/`0x1009`).
+- **identify**: 장치 LED 점멸. 무해한 편의 기능.
+
+### OPTIONAL (참고 가치는 있으나 1차 범위 밖)
+- **이슈 판정 임계값**(`monitoring/issues.py`): 클럭 이상은 즉시, 복구는 정상 5초 연속. flow 지연은 설정 지연의 80%에서 경고·60%에서 복구, late packet 증가는 즉시 이슈, 인터페이스 사용률 80% 경고·60% 복구(히스테리시스). 클럭 오프셋은 최근 11~20 샘플 표준편차 10000ppb 초과 시 경고, 5초 안정 시 복구. 우리가 RTP에서 직접 계산하는 지표와는 소스가 다르다(Dante 수신기의 자체 보고). Dante 수신기 상태를 보여줄 때 채택.
+- **UI 레벨 미터 로직**(`scripts/webapp/peak-meter.js`): 하강 20dB/s, peak hold 2초 후 20dB/s 하강, over 표시 2초 유지(횟수 상한 999), 영역 구분(−18 미만/−18~−6/−6 이상), 숫자 갱신 0.25초. `meter-animation.js`는 requestAnimationFrame에 프레임 간격 상한 0.1초, 화면 밖 미터는 갱신 생략. Vue 3 composable로 옮길 만하다.
+- **지연 쓰기**: ARC `0x1101` + 고정 22바이트 preamble + 지연(ns, u32)을 두 번. 영구 저장 `0x1F01`. 표준 지연값 0.15/0.25/0.5/1/2/5ms.
+- **샘플레이트·인코딩 쓰기**: 코드상 합성된 형식이라 실기기 검증 근거가 없다. 변경하면 유니캐스트 flow가 끊길 수 있다.
+- **게인(아날로그 코덱)**, **프리셋**(Dante Controller XML 호환; 적용은 계획→실행→검증), **레벨 이력**(초 단위 900슬롯·분 단위 1440슬롯 링버퍼), **AES67 TX 멀티캐스트 flow 생성**(ARC 2809 `0x2601`, 삭제 `0x2602`, 조회 `0x2600`)은 후속 단계에서 필요할 때 검토.
+- **로컬 데몬의 이벤트 모델**: "연결 직후 snapshot, 이후 필드 단위 patch, 큐 초과 시 재동기화 요구" 설계는 Electron 메인↔렌더러 IPC에 차용 가능. 고빈도 미터 데이터는 SSE보다 MessagePort가 적합하다고 판단.
+- **테스트 자료**: `tests/webapp/fixtures/metering-scale.json`(raw→dBFS 표)을 미터 변환 단위 테스트의 기준표로 사용 가능. pcap 같은 패킷 캡처 파일은 없다.
+- **DDM 감지**: 장치가 DDM에 enroll되어 있으면 직접 ARC 제어가 거부될 수 있다. 감지해서 "DDM 관리 중, 읽기 전용"으로 표시하는 정도만 권장.
+
+### NOT NEEDED (이번 범위에서는 가져오지 않음)
+- 장치 에뮬레이션 전용 코드: `publications.rs`, `discovery.rs`(가상 장치 광고), `device_requests.rs`, `parse_set_*_request`류.
+- DDM 연동 전체(`dapi.rs`, `controller_api.rs`, `managed_*`, `ddm/*`): 계정·인증·권한 모델이 필요해 범위가 크다.
+- 잠금/해제 명령: 암호화 키를 호스트가 공급해야 하는데 출처를 확인하지 못했다.
+- 클럭 쓰기, 네트워크(정적 IP·이중화) 쓰기: 잘못 쓰면 네트워크 동기가 깨지거나 장치에 접속할 수 없게 된다.
+- **재부팅, 공장 초기화, 설정 삭제 명령**: 구현하지 않는다.
+- 이벤트 저널 영속화·작업 감사 기록, 웹 UI 코드(Preact), 데몬의 인증·TLS·SQLite·Redis·MCP, Shure·영상(Dante AV)·호스트 오디오 어댑터.
+- `netaudio-endpoint`(Linux 가상 Dante 송수신 endpoint): PTPv1만 구현하고 소프트웨어 타임스탬프를 쓴다. PTPv2를 구현하지 않아 AES67 모니터링에는 쓸 수 없다. M3(Send/Return)는 시작하지 않으며, 나중에 송수신 설계 참고용으로만 기록한다(clock transport 분리, 포트 재사용 격리 대기, 지터·버퍼 설정 모델).
+
+### 구현 시 주의
+- 쓰기 명령(구독, 이름, 지연, AES67, 샘플레이트)은 오디오 경로를 즉시 바꾼다. 확인 대화상자와 읽기 전용 모드를 두고, 쓰기 전 capability·잠금·DDM 관리 여부를 점검한다.
+- AES67 on/off, multicast prefix, 샘플레이트 변경은 재부팅이나 flow 단절이 따를 수 있다.
+- 법적: Dante는 Audinate의 상표이고 프로토콜은 비공개 규격을 역공학한 것이다. 참고 저장소도 "독립 상호운용 프로젝트, Audinate와 무관"이라고 밝힌다. 우리 앱에도 같은 취지의 비제휴 고지를 넣는다. 참고 저장소 라이선스는 Unlicense이지만 웹 UI 아이콘은 별도 라이선스 파일이 있어 쓰지 않는다.
+- 제안 구현 순서: ① 탐지·목록(읽기 전용) → ② 채널·구독 상태 표시(상태 코드표 포함) → ③ AES67 상태 표시 → ④ 구독 변경 → ⑤ 이름·AES67·지연 설정.
+
+## 11. 확인하지 못한 것
+- 모든 오프셋과 opcode는 소스상 정의이며 실장비·패킷 캡처와 대조하지 않았다. 샘플레이트 쓰기처럼 코드상 합성된 것으로 보이는 형식은 특히 그렇다.
+- 읽기 요약 담당이 일부만 읽은 파일: `responses/clock.rs`, `parser/audio.rs`, `parser.rs`의 RX/TX 페이지 파서. 오프셋 상수만 본 파일: `responses/channel_status.rs`, `flows.rs`, `receiver_flow_status.rs`, `receiver_ranges.rs`, `pointer_table.rs`. 훑거나 읽지 못한 파일: `spec/*`, `flow_plan.rs`, `flow_readback.rs`, `subscription_reconciliation.rs`, `netif/*`, `client.rs`, 데몬 내부(미터링 갱신 주기, 패킷 손실 판정), `routing.js` 렌더링 상세, Playwright 스펙, `capture/`.
+- 상세 미터링이 start 한 번으로 얼마나 지속되는지(갱신 로직은 Rust 데몬 쪽).
+- 기능 마스크 비트가 어느 word에 속하는지.
+- 웹 UI의 한국어 지원 여부, vendor 라이브러리 라이선스.
