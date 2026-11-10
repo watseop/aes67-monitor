@@ -6,7 +6,7 @@ directories:
 
 # OS specific settings
 mac:
-  icon: "icon/icon.ico"
+  icon: "icon/icon.icns"
   target:
     - target: dmg
       arch: [x64, arm64]
