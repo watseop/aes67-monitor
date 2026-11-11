@@ -131,21 +131,11 @@ function groupRanges(group) {
 }
 
 /**
- * Overall channel span of a group, e.g. "1-136". Short enough for a table
- * cell even for groups with many members; groupRanges() has the detail.
- */
-function groupSpan(group) {
-	const last = group.members.length - 1;
-	const end = group.starts[last] + group.members[last].channels - 1;
-	return group.starts[0] + "-" + end;
-}
-
-/**
  * Turns an ordered stream list into display rows. A group row is placed where
  * its first member appears in the list; member rows follow it when expanded.
  * @param {Object[]} streams - already filtered and sorted streams.
  * @param {Object} expanded - group key -> true when the group is expanded.
- * @returns {Object[]} rows: { key, group?, stream?, inGroup?, range? }
+ * @returns {Object[]} rows: { key, group?, stream?, inGroup? }
  */
 function buildRows(streams, expanded) {
 	const groups = findGroups(streams);
@@ -164,16 +154,9 @@ function buildRows(streams, expanded) {
 		emitted.add(group.key);
 		rows.push({ key: "group:" + group.key, group });
 		if (expanded && expanded[group.key]) {
-			group.members.forEach((member, i) => {
-				const start = group.starts[i];
-				rows.push({
-					key: member.id,
-					stream: member,
-					inGroup: true,
-					// Channel range of this member within the source, e.g. "9-12".
-					range: start + "-" + (start + member.channels - 1),
-				});
-			});
+			for (const member of group.members) {
+				rows.push({ key: member.id, stream: member, inGroup: true });
+			}
 		}
 	}
 
@@ -184,6 +167,5 @@ module.exports = {
 	parseStreamName,
 	findGroups,
 	groupRanges,
-	groupSpan,
 	buildRows,
 };

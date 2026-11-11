@@ -71,8 +71,12 @@
 						</span>
 						<span
 							class="badge bg-info ms-2 text-nowrap"
-							title="Streams from the same source, grouped by name and channel range"
-							>{{ row.group.members.length }} streams</span
+							:title="
+								row.group.members.length +
+								' streams: ch ' +
+								groupRanges(row.group)
+							"
+							>{{ row.group.channels }} ch</span
 						>
 					</td>
 					<td></td>
@@ -85,11 +89,7 @@
 						</span>
 					</td>
 					<td></td>
-					<td v-if="streamCount > 0" :title="groupRanges(row.group)">
-						<small class="text-muted text-nowrap"
-							>Ch {{ groupSpan(row.group) }}</small
-						>
-					</td>
+					<td v-if="streamCount > 0"></td>
 					<td></td>
 					<td></td>
 				</tr>
@@ -98,15 +98,7 @@
 					:key="stream.id"
 				>
 					<tr>
-						<td :class="{ 'ps-4': row.inGroup }">
-							{{ stream.name }}
-							<span
-								v-if="row.range"
-								class="badge text-bg-light border ms-2 text-nowrap"
-								title="Channels of the source carried by this stream"
-								>Ch {{ row.range }}</span
-							>
-						</td>
+						<td :class="{ 'ps-4': row.inGroup }">{{ stream.name }}</td>
 						<td>
 							<span
 								class="badge bg-primary me-1"
@@ -289,7 +281,7 @@ import {
 	expandedGroups,
 	toggleGroup,
 } from "../../app.js";
-import { buildRows, groupRanges, groupSpan } from "../../lib/groups.js";
+import { buildRows, groupRanges } from "../../lib/groups.js";
 import { ref, computed } from "vue";
 
 export default {
@@ -373,7 +365,6 @@ export default {
 		return {
 			rows,
 			groupRanges,
-			groupSpan,
 			expandedGroups,
 			toggleGroup,
 			sortedStreams,

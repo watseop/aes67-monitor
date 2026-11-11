@@ -4,7 +4,6 @@ const {
 	parseStreamName,
 	findGroups,
 	groupRanges,
-	groupSpan,
 	buildRows,
 } = require("../src/lib/groups.js");
 
@@ -139,9 +138,6 @@ test("buildRows: group row at first member position, members only when expanded"
 		["p", "G", "a", "b", "q"]
 	);
 	assert.strictEqual(expanded[2].inGroup, true);
-	assert.strictEqual(expanded[2].range, "1-8");
-	assert.strictEqual(expanded[3].range, "9-12");
-	assert.strictEqual(expanded[0].range, undefined);
 	assert.strictEqual(expanded[0].inGroup, false);
 });
 
@@ -161,17 +157,4 @@ test("groupRanges uses the start channels from the names", () => {
 	);
 	assert.strictEqual(from9.channels, 16);
 	assert.strictEqual(groupRanges(from9), "9-16, 17-24");
-});
-
-test("groupSpan is short even for many members", () => {
-	const list = [];
-	for (let i = 0; i < 17; i++) {
-		list.push(s("id" + i, "Dev-" + (1 + i * 8), 8));
-	}
-	const g = findGroups(list).get("id0");
-	assert.strictEqual(g.members.length, 17);
-	assert.strictEqual(groupSpan(g), "1-136");
-	assert.ok(groupRanges(g).length > 60); // the detailed form is long
-	const g2 = findGroups([s("a", "S-9", 8), s("b", "S-17", 8)]).get("a");
-	assert.strictEqual(groupSpan(g2), "9-24");
 });
