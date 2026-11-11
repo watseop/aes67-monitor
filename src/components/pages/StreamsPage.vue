@@ -162,6 +162,51 @@
 						</button>
 					</td>
 				</tr>
+				<tr v-if="stream.id === playing && levels && levels.id === stream.id">
+					<td colspan="9" class="pt-0">
+						<div class="d-flex flex-wrap gap-2 align-items-end">
+							<div
+								v-for="(db, ch) in levels.peak"
+								:key="ch"
+								class="text-center"
+								style="width: 44px"
+								:title="
+									'Ch ' +
+									(ch + 1) +
+									': peak ' +
+									db.toFixed(1) +
+									' dBFS, RMS ' +
+									levels.rms[ch].toFixed(1) +
+									' dBFS'
+								"
+							>
+								<div
+									class="progress"
+									style="height: 40px; width: 14px; margin: 0 auto"
+									role="progressbar"
+								>
+									<div
+										class="progress-bar"
+										:class="levelClass(db)"
+										:style="{
+											width: '100%',
+											height: levelPercent(db) + '%',
+											alignSelf: 'flex-end',
+										}"
+									></div>
+								</div>
+								<small class="text-muted">{{ ch + 1 }}</small>
+								<div style="font-size: 0.65rem">
+									<span v-if="!levels.active" class="text-muted">-</span>
+									<span v-else-if="db <= silentDb" class="text-danger"
+										>silent</span
+									>
+									<span v-else>{{ db.toFixed(0) }}</span>
+								</div>
+							</div>
+						</div>
+					</td>
+				</tr>
 			</template>
 		</tbody>
 	</table>
@@ -181,6 +226,7 @@ import {
 	persistentData,
 	streamIndex,
 	getCurrentSupportedSampleRates,
+	levels,
 } from "../../app.js";
 import { ref, computed } from "vue";
 
@@ -230,6 +276,21 @@ export default {
 			}
 		}
 
+		// Below this peak a channel is shown as "silent" (no signal on the source).
+		const silentDb = -80;
+
+		function levelPercent(db) {
+			// Meter range -60..0 dBFS.
+			return Math.max(0, Math.min(100, ((db + 60) / 60) * 100));
+		}
+
+		function levelClass(db) {
+			if (db <= silentDb) return "bg-secondary";
+			if (db > -3) return "bg-danger";
+			if (db > -12) return "bg-warning";
+			return "bg-success";
+		}
+
 		const sortedStreams = computed(() => {
 			const streamsList = searchStreams();
 			return streamsList.slice().sort((a, b) => {
@@ -260,6 +321,10 @@ export default {
 			persistentData,
 			streamIndex,
 			getCurrentSupportedSampleRates,
+			levels,
+			silentDb,
+			levelPercent,
+			levelClass,
 		};
 	},
 };

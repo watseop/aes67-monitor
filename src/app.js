@@ -14,6 +14,15 @@ export const selectedChannel = ref([]);
 export const streamIndex = ref([]);
 export const visibleStreams = ref(0);
 export const playing = ref("");
+// Latest per-channel levels of the playing stream: {id, active, peak[], rms[]} (dBFS)
+export const levels = ref(null);
+let levelsUpdatedAt = 0;
+// Hide the meter if reports stop (audio process stopped or restarted).
+setInterval(() => {
+	if (levels.value && Date.now() - levelsUpdatedAt > 1000) {
+		levels.value = null;
+	}
+}, 500);
 export const persistentData = ref({
 	settings: {
 		bufferSize: 16,
@@ -232,6 +241,7 @@ export const getChannelSelectValues = (stream) => {
 };
 
 export const playStream = (stream) => {
+	levels.value = null;
 	if (playing.value == stream.id) {
 		playing.value = "";
 		sendMessage({ type: "stop" });
@@ -344,6 +354,12 @@ if (window.electronAPI) {
 			case "audioDevices":
 				audioInterfaces.value = message.data;
 				interfaceCount.value = message.data.length;
+				break;
+			case "levels":
+				if (message.data.id === playing.value) {
+					levels.value = message.data;
+					levelsUpdatedAt = Date.now();
+				}
 				break;
 			case "updatePersistentData":
 				persistentData.value = message.data;

@@ -356,6 +356,13 @@ sdpProcess.on("message", (data) => {
 	}
 });
 
+// Forward level meter reports from the audio child process to the renderer
+audioProcess.on("message", (message) => {
+	if (message && message.type === "levels") {
+		sendMessage("levels", message.data);
+	}
+});
+
 // Initialize the application when ready
 app.whenReady().then(() => {
 	createMainWindow();
