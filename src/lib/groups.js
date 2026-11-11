@@ -131,6 +131,16 @@ function groupRanges(group) {
 }
 
 /**
+ * Overall channel span of a group, e.g. "1-136". Short enough for a table
+ * cell even for groups with many members; groupRanges() has the detail.
+ */
+function groupSpan(group) {
+	const last = group.members.length - 1;
+	const end = group.starts[last] + group.members[last].channels - 1;
+	return group.starts[0] + "-" + end;
+}
+
+/**
  * Turns an ordered stream list into display rows. A group row is placed where
  * its first member appears in the list; member rows follow it when expanded.
  * @param {Object[]} streams - already filtered and sorted streams.
@@ -163,4 +173,10 @@ function buildRows(streams, expanded) {
 	return rows;
 }
 
-module.exports = { parseStreamName, findGroups, groupRanges, buildRows };
+module.exports = {
+	parseStreamName,
+	findGroups,
+	groupRanges,
+	groupSpan,
+	buildRows,
+};
