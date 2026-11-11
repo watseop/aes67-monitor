@@ -245,6 +245,51 @@ export const getChannelSelectValues = (stream) => {
 	return values;
 };
 
+// Group monitoring: all member streams of one group are received at once and
+// only their levels are shown (no audio). One group at a time.
+export const monitoredGroup = ref("");
+// {key, members: [{id, active, peak[], rms[]}]} (dBFS), same shape as `levels`
+export const groupLevels = ref(null);
+let groupLevelsUpdatedAt = 0;
+setInterval(() => {
+	if (groupLevels.value && Date.now() - groupLevelsUpdatedAt > 1000) {
+		groupLevels.value = null;
+	}
+}, 500);
+
+export const toggleGroupMonitor = (group) => {
+	groupLevels.value = null;
+	if (monitoredGroup.value === group.key) {
+		monitoredGroup.value = "";
+		sendMessage({ type: "stopMonitorGroup" });
+		return;
+	}
+	const streams = [];
+	for (const stream of group.members) {
+		const media = stream.media[0];
+		if (!media || !media.rtp[0]) {
+			console.error("Cannot monitor group, stream without RTP info", stream.id);
+			return;
+		}
+		streams.push({
+			id: stream.id,
+			mcast: stream.mcast,
+			port: media.port,
+			codec: media.rtp[0].codec,
+			samplerate: media.rtp[0].rate,
+			channels: media.rtp[0].encoding,
+			ptime: media.ptime,
+			filter: !!media.sourceFilter,
+			filterAddr: media.sourceFilter ? media.sourceFilter.srcList : "",
+		});
+	}
+	monitoredGroup.value = group.key;
+	sendMessage({
+		type: "monitorGroup",
+		data: { key: group.key, streams },
+	});
+};
+
 export const playStream = (stream) => {
 	levels.value = null;
 	if (playing.value == stream.id) {
@@ -364,6 +409,12 @@ if (window.electronAPI) {
 				if (message.data.id === playing.value) {
 					levels.value = message.data;
 					levelsUpdatedAt = Date.now();
+				}
+				break;
+			case "groupLevels":
+				if (message.data.key === monitoredGroup.value) {
+					groupLevels.value = message.data;
+					groupLevelsUpdatedAt = Date.now();
 				}
 				break;
 			case "updatePersistentData":
