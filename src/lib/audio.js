@@ -1,13 +1,27 @@
 const { RtAudio, RtAudioFormat } = require("audify");
 const dgram = require("dgram");
+const { LevelMeter } = require("./level.js");
 
 let rtAudio;
 let client;
 let streamOpen = false;
 let argsCache;
+let meterTimer = null;
+
+// Level meter report interval. 100 ms keeps IPC traffic at 10 msg/s while the
+// meter still reacts quickly; packets are only accumulated in the UDP callback.
+const METER_INTERVAL_MS = 100;
+
+const stopMeter = function () {
+	if (meterTimer) {
+		clearInterval(meterTimer);
+		meterTimer = null;
+	}
+};
 
 const start = function (args) {
 	argsCache = args;
+	stopMeter();
 	if (streamOpen) {
 		streamOpen = false;
 		client.close();
@@ -33,6 +47,18 @@ const start = function (args) {
 	const bytesPerSample = args.codec == "L24" ? 3 : 2;
 	const pcmDataSize = samplesPerPacket * bytesPerSample * args.channels;
 	const pcmL16out = Buffer.alloc(samplesPerPacket * 4 * bufferSize);
+
+	// Meters every channel of the stream (not only the two routed to the output)
+	// so a silent source channel is visible.
+	const meter = new LevelMeter(args.channels, bytesPerSample);
+	meterTimer = setInterval(() => {
+		if (process.connected) {
+			process.send({
+				type: "levels",
+				data: Object.assign({ id: args.id }, meter.snapshot()),
+			});
+		}
+	}, METER_INTERVAL_MS);
 
 	let jitterBufferSize = args.jitterBufferEnabled ? args.jitterBufferSize : 0;
 	let outSampleFactor = 1;
@@ -68,6 +94,9 @@ const start = function (args) {
 		) {
 			return;
 		}
+
+		// Packet length was validated above, so the meter stays within bounds.
+		meter.push(buffer, headerLength, samplesPerPacket);
 
 		let seqNum = buffer.readUInt16BE(2);
 		let bufferIndex = (seqNum % bufferSize) * samplesPerPacket * 4;
@@ -151,6 +180,7 @@ const start = function (args) {
 		client.bind(args.port);
 		streamOpen = true;
 	} catch (error) {
+		stopMeter();
 		console.error("Error during stream setup:", error);
 	}
 };
@@ -163,6 +193,7 @@ const restart = (args) => {
 };
 
 const stop = function () {
+	stopMeter();
 	if (streamOpen) {
 		streamOpen = false;
 		client.close();
