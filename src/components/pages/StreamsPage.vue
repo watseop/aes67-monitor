@@ -91,7 +91,77 @@
 					<td></td>
 					<td v-if="streamCount > 0"></td>
 					<td></td>
-					<td></td>
+					<td>
+						<button
+							class="btn btn-sm"
+							:class="
+								monitoredGroup === row.group.key ? 'btn-danger' : 'btn-success'
+							"
+							:title="
+								monitoredGroup === row.group.key
+									? 'Stop monitoring levels'
+									: 'Monitor levels of all channels (no audio)'
+							"
+							@click="toggleGroupMonitor(row.group)"
+						>
+							<i
+								class="bi"
+								:class="
+									monitoredGroup === row.group.key
+										? 'bi-stop-fill'
+										: 'bi-activity'
+								"
+							></i>
+						</button>
+					</td>
+				</tr>
+				<tr v-if="row.group && monitoredGroup === row.group.key">
+					<td colspan="9" class="pt-0">
+						<div v-if="!groupStrip(row.group)" class="text-muted small">
+							Waiting for packets...
+						</div>
+						<div v-else class="d-flex flex-wrap gap-2 align-items-end">
+							<div
+								v-for="c in groupStrip(row.group)"
+								:key="c.ch"
+								class="text-center"
+								style="width: 44px"
+								:title="
+									'Ch ' +
+									c.ch +
+									': peak ' +
+									c.peak.toFixed(1) +
+									' dBFS, RMS ' +
+									c.rms.toFixed(1) +
+									' dBFS'
+								"
+							>
+								<div
+									class="progress"
+									style="height: 40px; width: 14px; margin: 0 auto"
+									role="progressbar"
+								>
+									<div
+										class="progress-bar"
+										:class="levelClass(c.peak)"
+										:style="{
+											width: '100%',
+											height: levelPercent(c.peak) + '%',
+											alignSelf: 'flex-end',
+										}"
+									></div>
+								</div>
+								<small class="text-muted">{{ c.ch }}</small>
+								<div style="font-size: 0.65rem">
+									<span v-if="!c.active" class="text-muted">-</span>
+									<span v-else-if="c.peak <= silentDb" class="text-danger"
+										>silent</span
+									>
+									<span v-else>{{ c.peak.toFixed(0) }}</span>
+								</div>
+							</div>
+						</div>
+					</td>
 				</tr>
 				<template
 					v-for="stream in row.stream ? [row.stream] : []"
@@ -280,6 +350,9 @@ import {
 	levels,
 	expandedGroups,
 	toggleGroup,
+	monitoredGroup,
+	groupLevels,
+	toggleGroupMonitor,
 } from "../../app.js";
 import { buildRows, groupRanges } from "../../lib/groups.js";
 import { ref, computed } from "vue";
@@ -345,6 +418,27 @@ export default {
 			return "bg-success";
 		}
 
+		// One bar per channel of the whole group, numbered by the first channel
+		// parsed from each member's name. null until the first report arrives.
+		function groupStrip(group) {
+			const gl = groupLevels.value;
+			if (!gl || gl.key !== group.key) return null;
+			const out = [];
+			group.members.forEach((member, i) => {
+				const m = gl.members.find((x) => x.id === member.id);
+				if (!m) return;
+				m.peak.forEach((peak, c) => {
+					out.push({
+						ch: group.starts[i] + c,
+						peak,
+						rms: m.rms[c],
+						active: m.active,
+					});
+				});
+			});
+			return out.length ? out : null;
+		}
+
 		const sortedStreams = computed(() => {
 			const streamsList = searchStreams();
 			return streamsList.slice().sort((a, b) => {
@@ -384,6 +478,9 @@ export default {
 			streamIndex,
 			getCurrentSupportedSampleRates,
 			levels,
+			monitoredGroup,
+			toggleGroupMonitor,
+			groupStrip,
 			silentDb,
 			levelPercent,
 			levelClass,

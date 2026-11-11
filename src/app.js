@@ -1,4 +1,5 @@
 import { ref, computed } from "vue";
+import { findGroups } from "./lib/groups.js";
 
 export const page = ref("streams");
 export const search = ref({ streams: "", interfaces: "", devices: "" });
@@ -245,6 +246,99 @@ export const getChannelSelectValues = (stream) => {
 	return values;
 };
 
+// Group monitoring: all member streams of one group are received at once and
+// only their levels are shown (no audio). One group at a time.
+export const monitoredGroup = ref("");
+// {key, members: [{id, active, peak[], rms[]}]} (dBFS), same shape as `levels`
+export const groupLevels = ref(null);
+let groupLevelsUpdatedAt = 0;
+setInterval(() => {
+	if (groupLevels.value && Date.now() - groupLevelsUpdatedAt > 1000) {
+		groupLevels.value = null;
+	}
+}, 500);
+
+// Receive descriptors for every member of a group; null if one has no RTP info.
+const monitorStreams = (group) => {
+	const out = [];
+	for (const stream of group.members) {
+		const media = stream.media[0];
+		if (!media || !media.rtp[0]) {
+			console.error("Cannot monitor group, stream without RTP info", stream.id);
+			return null;
+		}
+		out.push({
+			id: stream.id,
+			mcast: stream.mcast,
+			port: media.port,
+			codec: media.rtp[0].codec,
+			samplerate: media.rtp[0].rate,
+			channels: media.rtp[0].encoding,
+			ptime: media.ptime,
+			filter: !!media.sourceFilter,
+			filterAddr: media.sourceFilter ? media.sourceFilter.srcList : "",
+		});
+	}
+	return out;
+};
+
+// JSON of the descriptors sent to the monitor, to detect member changes.
+let monitoredSignature = "";
+
+const stopGroupMonitor = () => {
+	monitoredGroup.value = "";
+	monitoredSignature = "";
+	groupLevels.value = null;
+	sendMessage({ type: "stopMonitorGroup" });
+};
+
+export const toggleGroupMonitor = (group) => {
+	groupLevels.value = null;
+	if (monitoredGroup.value === group.key) {
+		stopGroupMonitor();
+		return;
+	}
+	const list = monitorStreams(group);
+	if (!list) {
+		return;
+	}
+	monitoredGroup.value = group.key;
+	monitoredSignature = JSON.stringify(list);
+	sendMessage({
+		type: "monitorGroup",
+		data: { key: group.key, streams: list },
+	});
+};
+
+// Called on every stream list update: if members of the monitored group were
+// added, removed or changed, restart reception with the new list; if the group
+// no longer exists (e.g. its key changed), stop.
+const reconcileGroupMonitor = () => {
+	if (!monitoredGroup.value) {
+		return;
+	}
+	let group = null;
+	for (const g of findGroups(streams.value).values()) {
+		if (g.key === monitoredGroup.value) {
+			group = g;
+			break;
+		}
+	}
+	const list = group ? monitorStreams(group) : null;
+	if (!list) {
+		stopGroupMonitor();
+		return;
+	}
+	const signature = JSON.stringify(list);
+	if (signature !== monitoredSignature) {
+		monitoredSignature = signature;
+		sendMessage({
+			type: "monitorGroup",
+			data: { key: monitoredGroup.value, streams: list },
+		});
+	}
+};
+
 export const playStream = (stream) => {
 	levels.value = null;
 	if (playing.value == stream.id) {
@@ -349,6 +443,7 @@ if (window.electronAPI) {
 			case "streams":
 				streams.value = message.data;
 				streamCount.value = message.data.length;
+				reconcileGroupMonitor();
 				break;
 			case "devices":
 				console.log("devices", message.data);
@@ -364,6 +459,12 @@ if (window.electronAPI) {
 				if (message.data.id === playing.value) {
 					levels.value = message.data;
 					levelsUpdatedAt = Date.now();
+				}
+				break;
+			case "groupLevels":
+				if (message.data.key === monitoredGroup.value) {
+					groupLevels.value = message.data;
+					groupLevelsUpdatedAt = Date.now();
 				}
 				break;
 			case "updatePersistentData":

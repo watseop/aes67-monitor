@@ -46,6 +46,7 @@ const rtAudio = new RtAudio(audioAPI);
 // Spawn child processes for SDP and Audio functionalities
 const sdpProcess = fork(path.join(__dirname, "./src/lib/sdp.js"));
 const audioProcess = fork(path.join(__dirname, "./src/lib/audio.js"));
+const monitorProcess = fork(path.join(__dirname, "./src/lib/monitor.js"));
 
 /**
  * Creates and configures the main application window.
@@ -119,6 +120,18 @@ function handleIpcMessage(message) {
 		case "stop":
 			audioProcess.send({ type: "stop" });
 			break;
+		case "monitorGroup":
+			monitorProcess.send({
+				type: "start",
+				data: {
+					...message.data,
+					networkInterface: currentNetworkInterface.address,
+				},
+			});
+			break;
+		case "stopMonitorGroup":
+			monitorProcess.send({ type: "stop" });
+			break;
 		case "addStream":
 			sdpProcess.send({ type: "add", data: message.data });
 			break;
@@ -132,6 +145,7 @@ function handleIpcMessage(message) {
 				updateNetworkInterfaces();
 				store.set("interface", currentNetworkInterface);
 				audioProcess.send({ type: "stop" });
+				monitorProcess.send({ type: "stop" });
 				sdpProcess.send({
 					type: "interface",
 					data: currentNetworkInterface.address,
@@ -363,6 +377,13 @@ audioProcess.on("message", (message) => {
 	}
 });
 
+// Forward group level reports from the monitor child process to the renderer
+monitorProcess.on("message", (message) => {
+	if (message && message.type === "groupLevels") {
+		sendMessage("groupLevels", message.data);
+	}
+});
+
 // Initialize the application when ready
 app.whenReady().then(() => {
 	createMainWindow();
@@ -378,6 +399,7 @@ app.whenReady().then(() => {
 app.on("window-all-closed", () => {
 	sdpProcess.kill();
 	audioProcess.kill();
+	monitorProcess.kill();
 	app.quit();
 });
 
