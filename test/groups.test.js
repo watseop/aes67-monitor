@@ -139,6 +139,9 @@ test("buildRows: group row at first member position, members only when expanded"
 		["p", "G", "a", "b", "q"]
 	);
 	assert.strictEqual(expanded[2].inGroup, true);
+	assert.strictEqual(expanded[2].range, "1-8");
+	assert.strictEqual(expanded[3].range, "9-12");
+	assert.strictEqual(expanded[0].range, undefined);
 	assert.strictEqual(expanded[0].inGroup, false);
 });
 

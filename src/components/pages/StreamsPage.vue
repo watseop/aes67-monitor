@@ -85,10 +85,8 @@
 						</span>
 					</td>
 					<td></td>
-					<td v-if="streamCount > 0">
-						<small
-							class="text-muted text-nowrap"
-							:title="groupRanges(row.group)"
+					<td v-if="streamCount > 0" :title="groupRanges(row.group)">
+						<small class="text-muted text-nowrap"
 							>Ch {{ groupSpan(row.group) }}</small
 						>
 					</td>
@@ -100,7 +98,15 @@
 					:key="stream.id"
 				>
 					<tr>
-						<td :class="{ 'ps-4': row.inGroup }">{{ stream.name }}</td>
+						<td :class="{ 'ps-4': row.inGroup }">
+							{{ stream.name }}
+							<span
+								v-if="row.range"
+								class="badge text-bg-light border ms-2 text-nowrap"
+								title="Channels of the source carried by this stream"
+								>Ch {{ row.range }}</span
+							>
+						</td>
 						<td>
 							<span
 								class="badge bg-primary me-1"
