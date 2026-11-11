@@ -3,6 +3,7 @@ const assert = require("node:assert");
 const {
 	parseStreamName,
 	findGroups,
+	groupRanges,
 	buildRows,
 } = require("../src/lib/groups.js");
 
@@ -145,4 +146,15 @@ test("buildRows keeps row keys unique", () => {
 	const key = findGroups(list).get("a").key;
 	const rows = buildRows(list, { [key]: true });
 	assert.strictEqual(new Set(rows.map((r) => r.key)).size, rows.length);
+});
+
+test("groupRanges uses the start channels from the names", () => {
+	const from1 = findGroups([s("a", "M-1", 8), s("b", "M-9", 4)]).get("a");
+	assert.strictEqual(groupRanges(from1), "1-8, 9-12");
+
+	const from9 = findGroups([s("c", "Source-9", 8), s("d", "Source-17", 8)]).get(
+		"c"
+	);
+	assert.strictEqual(from9.channels, 16);
+	assert.strictEqual(groupRanges(from9), "9-16, 17-24");
 });

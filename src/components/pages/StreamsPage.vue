@@ -279,7 +279,7 @@ import {
 	expandedGroups,
 	toggleGroup,
 } from "../../app.js";
-import { buildRows } from "../../lib/groups.js";
+import { buildRows, groupRanges } from "../../lib/groups.js";
 import { ref, computed } from "vue";
 
 export default {
@@ -359,18 +359,6 @@ export default {
 		const rows = computed(() =>
 			buildRows(sortedStreams.value, expandedGroups.value)
 		);
-
-		// "1-8, 9-12": channel range covered by each member stream.
-		function groupRanges(group) {
-			let first = 1;
-			return group.members
-				.map((member) => {
-					const range = first + "-" + (first + member.channels - 1);
-					first += member.channels;
-					return range;
-				})
-				.join(", ");
-		}
 
 		return {
 			rows,

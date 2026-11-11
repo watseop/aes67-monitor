@@ -83,6 +83,8 @@ function findGroups(streams) {
 					name: first.base,
 					address: first.stream.origin.address,
 					members: chain.map((e) => e.stream),
+					// First channel of each member, taken from its name suffix.
+					starts: chain.map((e) => e.start),
 					channels: chain.reduce((sum, e) => sum + e.stream.channels, 0),
 					codec: first.stream.codec,
 					samplerate: first.stream.samplerate,
@@ -112,6 +114,20 @@ function findGroups(streams) {
 	}
 
 	return byStreamId;
+}
+
+/**
+ * Channel range of each member as shown in the UI, e.g. "1-8, 9-12".
+ * Uses the start channel parsed from each member's name, so a group that does
+ * not begin at channel 1 (e.g. "Source-9", "Source-17") shows "9-16, 17-24".
+ */
+function groupRanges(group) {
+	return group.members
+		.map((member, i) => {
+			const start = group.starts[i];
+			return start + "-" + (start + member.channels - 1);
+		})
+		.join(", ");
 }
 
 /**
@@ -147,4 +163,4 @@ function buildRows(streams, expanded) {
 	return rows;
 }
 
-module.exports = { parseStreamName, findGroups, buildRows };
+module.exports = { parseStreamName, findGroups, groupRanges, buildRows };
