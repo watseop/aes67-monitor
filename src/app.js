@@ -14,6 +14,11 @@ export const selectedChannel = ref([]);
 export const streamIndex = ref([]);
 export const visibleStreams = ref(0);
 export const playing = ref("");
+// Stream groups (one source announced as several streams): group key -> expanded
+export const expandedGroups = ref({});
+export const toggleGroup = (key) => {
+	expandedGroups.value[key] = !expandedGroups.value[key];
+};
 // Latest per-channel levels of the playing stream: {id, active, peak[], rms[]} (dBFS)
 export const levels = ref(null);
 let levelsUpdatedAt = 0;

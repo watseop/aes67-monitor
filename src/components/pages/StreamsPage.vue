@@ -51,162 +51,211 @@
 			</tr>
 		</thead>
 		<tbody>
-			<template v-for="stream in sortedStreams" :key="stream.id">
-				<tr>
-					<td>{{ stream.name }}</td>
+			<template v-for="row in rows" :key="row.key">
+				<tr v-if="row.group" class="table-active">
 					<td>
 						<span
-							class="badge bg-primary me-1"
-							title="Dante device"
-							v-if="stream.dante"
-							>Dante</span
+							style="cursor: pointer"
+							@click="toggleGroup(row.group.key)"
+							:title="expandedGroups[row.group.key] ? 'Collapse' : 'Expand'"
 						>
+							<i
+								class="bi me-1"
+								:class="
+									expandedGroups[row.group.key]
+										? 'bi-chevron-down'
+										: 'bi-chevron-right'
+								"
+							></i>
+							{{ row.group.name }}
+						</span>
 						<span
-							class="badge bg-primary me-1"
-							title="ST 2022-7 redundant stream"
-							v-if="
-								stream.groups &&
-								stream.groups[0] &&
-								stream.groups[0].type == 'DUP'
-							"
-							>2022-7</span
-						>
-						<span
-							class="badge bg-secondary me-1"
-							title="Manually added stream"
-							v-if="stream.manual"
-							>Manual</span
-						>
-						<span
-							class="badge bg-secondary me-1"
-							title="Stream is broadcasted on the network via SAP"
-							v-if="stream.announce"
-							>SAP</span
+							class="badge bg-info ms-2"
+							title="Streams from the same source, grouped by name and channel range"
+							>{{ row.group.members.length }} streams</span
 						>
 					</td>
+					<td></td>
+					<td></td>
+					<td>{{ row.group.address }}</td>
 					<td>
-						{{ stream.media[0].description ? stream.media[0].description : "" }}
-					</td>
-					<td>
-						{{ stream.origin.address }}
-					</td>
-					<td>
-						<span v-if="stream.isSupported" class="copy">
-							{{ stream.codec }} / {{ stream.samplerate }}Hz /
-							{{ stream.channels }}
+						<span class="copy">
+							{{ row.group.codec }} / {{ row.group.samplerate }}Hz /
+							{{ row.group.channels }}
 						</span>
 					</td>
-					<td>
-						<span
-							v-if="stream.media.length > 1 && stream.isSupported"
-							class="copy"
-						>
+					<td></td>
+					<td v-if="streamCount > 0">
+						<small class="text-muted">{{ groupRanges(row.group) }}</small>
+					</td>
+					<td></td>
+					<td></td>
+				</tr>
+				<template
+					v-for="stream in row.stream ? [row.stream] : []"
+					:key="stream.id"
+				>
+					<tr>
+						<td :class="{ 'ps-4': row.inGroup }">{{ stream.name }}</td>
+						<td>
+							<span
+								class="badge bg-primary me-1"
+								title="Dante device"
+								v-if="stream.dante"
+								>Dante</span
+							>
+							<span
+								class="badge bg-primary me-1"
+								title="ST 2022-7 redundant stream"
+								v-if="
+									stream.groups &&
+									stream.groups[0] &&
+									stream.groups[0].type == 'DUP'
+								"
+								>2022-7</span
+							>
+							<span
+								class="badge bg-secondary me-1"
+								title="Manually added stream"
+								v-if="stream.manual"
+								>Manual</span
+							>
+							<span
+								class="badge bg-secondary me-1"
+								title="Stream is broadcasted on the network via SAP"
+								v-if="stream.announce"
+								>SAP</span
+							>
+						</td>
+						<td>
+							{{
+								stream.media[0].description ? stream.media[0].description : ""
+							}}
+						</td>
+						<td>
+							{{ stream.origin.address }}
+						</td>
+						<td>
+							<span v-if="stream.isSupported" class="copy">
+								{{ stream.codec }} / {{ stream.samplerate }}Hz /
+								{{ stream.channels }}
+							</span>
+						</td>
+						<td>
+							<span
+								v-if="stream.media.length > 1 && stream.isSupported"
+								class="copy"
+							>
+								<select
+									class="form-select form-select-sm"
+									v-model="streamIndex[stream.id]"
+									:disabled="stream.id === playing"
+								>
+									<template v-for="(media, index) in stream.media" :key="index">
+										<option :value="index">
+											{{ media.connection.ip.split("/")[0] }}:{{ media.port }}
+										</option>
+									</template>
+								</select>
+							</span>
+							<span v-else class="copy"
+								>{{ stream.mcast }}:{{ stream.media[0].port }}</span
+							>
+						</td>
+						<td v-if="streamCount > 0">
 							<select
 								class="form-select form-select-sm"
-								v-model="streamIndex[stream.id]"
+								v-model="selectedChannel[stream.id]"
 								:disabled="stream.id === playing"
+								v-if="stream.isSupported"
 							>
-								<template v-for="(media, index) in stream.media" :key="index">
-									<option :value="index">
-										{{ media.connection.ip.split("/")[0] }}:{{ media.port }}
+								<template
+									v-for="value in getChannelSelectValues(stream)"
+									:key="value.value"
+								>
+									<option :value="value.value">
+										{{ value.string }}
 									</option>
 								</template>
 							</select>
-						</span>
-						<span v-else class="copy"
-							>{{ stream.mcast }}:{{ stream.media[0].port }}</span
-						>
-					</td>
-					<td v-if="streamCount > 0">
-						<select
-							class="form-select form-select-sm"
-							v-model="selectedChannel[stream.id]"
-							:disabled="stream.id === playing"
-							v-if="stream.isSupported"
-						>
-							<template
-								v-for="value in getChannelSelectValues(stream)"
-								:key="value.value"
+							<small
+								v-else
+								class="d-inline-flex px-2 py-1 fw-semibold text-danger-emphasis bg-danger-subtle border border-danger-subtle rounded-2"
+								>{{ stream.unsupportedReason }}</small
 							>
-								<option :value="value.value">
-									{{ value.string }}
-								</option>
-							</template>
-						</select>
-						<small
-							v-else
-							class="d-inline-flex px-2 py-1 fw-semibold text-danger-emphasis bg-danger-subtle border border-danger-subtle rounded-2"
-							>{{ stream.unsupportedReason }}</small
-						>
-					</td>
-					<td>
-						<button
-							class="btn btn-sm"
-							:class="{
-								'btn-success': stream.id !== playing,
-								'btn-danger': stream.id === playing,
-							}"
-							@click="playStream(stream)"
-							v-if="stream.isSupported"
-							:disabled="
-								!getCurrentSupportedSampleRates().includes(stream.samplerate)
-							"
-						>
-							<i v-if="stream.id === playing" class="bi bi-stop-fill"></i>
-							<i v-else class="bi bi-play-fill"></i>
-						</button>
-					</td>
-					<td>
-						<button class="btn btn-sm btn-primary" @click="viewStream(stream)">
-							<i class="bi bi-info-circle-fill"></i>
-						</button>
-					</td>
-				</tr>
-				<tr v-if="stream.id === playing && levels && levels.id === stream.id">
-					<td colspan="9" class="pt-0">
-						<div class="d-flex flex-wrap gap-2 align-items-end">
-							<div
-								v-for="(db, ch) in levels.peak"
-								:key="ch"
-								class="text-center"
-								style="width: 44px"
-								:title="
-									'Ch ' +
-									(ch + 1) +
-									': peak ' +
-									db.toFixed(1) +
-									' dBFS, RMS ' +
-									levels.rms[ch].toFixed(1) +
-									' dBFS'
+						</td>
+						<td>
+							<button
+								class="btn btn-sm"
+								:class="{
+									'btn-success': stream.id !== playing,
+									'btn-danger': stream.id === playing,
+								}"
+								@click="playStream(stream)"
+								v-if="stream.isSupported"
+								:disabled="
+									!getCurrentSupportedSampleRates().includes(stream.samplerate)
 								"
 							>
+								<i v-if="stream.id === playing" class="bi bi-stop-fill"></i>
+								<i v-else class="bi bi-play-fill"></i>
+							</button>
+						</td>
+						<td>
+							<button
+								class="btn btn-sm btn-primary"
+								@click="viewStream(stream)"
+							>
+								<i class="bi bi-info-circle-fill"></i>
+							</button>
+						</td>
+					</tr>
+					<tr v-if="stream.id === playing && levels && levels.id === stream.id">
+						<td colspan="9" class="pt-0">
+							<div class="d-flex flex-wrap gap-2 align-items-end">
 								<div
-									class="progress"
-									style="height: 40px; width: 14px; margin: 0 auto"
-									role="progressbar"
+									v-for="(db, ch) in levels.peak"
+									:key="ch"
+									class="text-center"
+									style="width: 44px"
+									:title="
+										'Ch ' +
+										(ch + 1) +
+										': peak ' +
+										db.toFixed(1) +
+										' dBFS, RMS ' +
+										levels.rms[ch].toFixed(1) +
+										' dBFS'
+									"
 								>
 									<div
-										class="progress-bar"
-										:class="levelClass(db)"
-										:style="{
-											width: '100%',
-											height: levelPercent(db) + '%',
-											alignSelf: 'flex-end',
-										}"
-									></div>
-								</div>
-								<small class="text-muted">{{ ch + 1 }}</small>
-								<div style="font-size: 0.65rem">
-									<span v-if="!levels.active" class="text-muted">-</span>
-									<span v-else-if="db <= silentDb" class="text-danger"
-										>silent</span
+										class="progress"
+										style="height: 40px; width: 14px; margin: 0 auto"
+										role="progressbar"
 									>
-									<span v-else>{{ db.toFixed(0) }}</span>
+										<div
+											class="progress-bar"
+											:class="levelClass(db)"
+											:style="{
+												width: '100%',
+												height: levelPercent(db) + '%',
+												alignSelf: 'flex-end',
+											}"
+										></div>
+									</div>
+									<small class="text-muted">{{ ch + 1 }}</small>
+									<div style="font-size: 0.65rem">
+										<span v-if="!levels.active" class="text-muted">-</span>
+										<span v-else-if="db <= silentDb" class="text-danger"
+											>silent</span
+										>
+										<span v-else>{{ db.toFixed(0) }}</span>
+									</div>
 								</div>
 							</div>
-						</div>
-					</td>
-				</tr>
+						</td>
+					</tr>
+				</template>
 			</template>
 		</tbody>
 	</table>
@@ -227,7 +276,10 @@ import {
 	streamIndex,
 	getCurrentSupportedSampleRates,
 	levels,
+	expandedGroups,
+	toggleGroup,
 } from "../../app.js";
+import { buildRows } from "../../lib/groups.js";
 import { ref, computed } from "vue";
 
 export default {
@@ -304,7 +356,27 @@ export default {
 			});
 		});
 
+		const rows = computed(() =>
+			buildRows(sortedStreams.value, expandedGroups.value)
+		);
+
+		// "1-8, 9-12": channel range covered by each member stream.
+		function groupRanges(group) {
+			let first = 1;
+			return group.members
+				.map((member) => {
+					const range = first + "-" + (first + member.channels - 1);
+					first += member.channels;
+					return range;
+				})
+				.join(", ");
+		}
+
 		return {
+			rows,
+			groupRanges,
+			expandedGroups,
+			toggleGroup,
 			sortedStreams,
 			setSort,
 			sortKey,
