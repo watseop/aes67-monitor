@@ -15,7 +15,8 @@
 		"build": "vue-cli-service build && electron-builder",
 		"lint": "vue-cli-service lint",
 		"format": "prettier --write .",
-		"start": "electron ."
+		"start": "electron .",
+		"test": "node --test \"test/**/*.test.js\""
 	},
 	"dependencies": {
 		"audify": "^1.9.0",
