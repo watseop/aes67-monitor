@@ -189,6 +189,7 @@
 										class="progress-bar"
 										:class="levelClass(db)"
 										:style="{
+											width: '100%',
 											height: levelPercent(db) + '%',
 											alignSelf: 'flex-end',
 										}"
