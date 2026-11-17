@@ -177,7 +177,11 @@ const start = function (args) {
 			"AES67 Monitor"
 		);
 		rtAudio.start();
-		client.bind(args.port);
+		// Bind to the stream's own multicast address, not the wildcard address:
+		// group memberships are host-wide (e.g. the group monitor joins other
+		// groups), and a wildcard socket on this port would also receive those
+		// packets and mix them into playback.
+		client.bind(args.port, args.mcast);
 		streamOpen = true;
 	} catch (error) {
 		stopMeter();
