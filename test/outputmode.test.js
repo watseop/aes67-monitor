@@ -86,3 +86,64 @@ test("mapChannels and mixdown reject partial frames and bad channel counts", () 
 		assert.strictEqual(fn(new Int16Array(0), 2, 2).length, 0);
 	}
 });
+
+function randomPacket(frames, channels, bytesPerSample, header = 12) {
+	const b = Buffer.alloc(header + frames * channels * bytesPerSample);
+	for (let i = header; i < b.length; i++) {
+		b[i] = Math.floor(Math.random() * 256);
+	}
+	return b;
+}
+
+test("renderPacket gives the same result as the allocating helpers", () => {
+	for (const bps of [2, 3]) {
+		for (const [src, out] of [
+			[12, 2],
+			[12, 12],
+			[4, 8],
+			[8, 2],
+			[2, 1],
+		]) {
+			const frames = 48;
+			const pkt = randomPacket(frames, src, bps);
+			const decoded = m.decodePcm16(pkt, 12, frames, src, bps);
+			const cases = {
+				mono: m.mixdown(decoded, src, out, 0.7),
+				multichannel: m.mapChannels(decoded, src, out),
+			};
+			for (const mode of Object.keys(cases)) {
+				// Start from garbage to prove that every output sample is written.
+				const buf = Buffer.alloc(5 + frames * out * 2, 0x55);
+				m.renderPacket(buf, 5, pkt, 12, frames, src, bps, mode, out, 0.7);
+				const got = new Int16Array(frames * out);
+				for (let i = 0; i < got.length; i++) {
+					got[i] = buf.readInt16LE(5 + i * 2);
+				}
+				assert.deepStrictEqual(got, cases[mode], mode + " " + src + "->" + out);
+				assert.strictEqual(buf[0], 0x55); // nothing written before the offset
+			}
+		}
+	}
+});
+
+test("renderPacket rejects short packets, small buffers and bad counts", () => {
+	const pkt = randomPacket(4, 2, 2);
+	const out = Buffer.alloc(16);
+	assert.throws(
+		() => m.renderPacket(out, 0, pkt, 12, 5, 2, 2, "mono", 2),
+		RangeError
+	);
+	assert.throws(
+		() => m.renderPacket(Buffer.alloc(8), 0, pkt, 12, 4, 2, 2, "mono", 2),
+		RangeError
+	);
+	assert.throws(
+		() => m.renderPacket(out, 0, pkt, 12, 4, 0, 2, "mono", 2),
+		RangeError
+	);
+	assert.throws(
+		() => m.renderPacket(out, 0, pkt, 12, 4, 2, 2, "mono", 0),
+		RangeError
+	);
+	assert.throws(() => m.renderPacket(out, 0, pkt, 12, 4, 2, 4, "mono", 2));
+});

@@ -4,9 +4,7 @@ const { LevelMeter } = require("./level.js");
 const {
 	resolveMode,
 	outputChannelCount,
-	decodePcm16,
-	mapChannels,
-	mixdown,
+	renderPacket,
 } = require("./outputmode.js");
 
 let rtAudio;
@@ -179,22 +177,20 @@ const start = function (args) {
 				);
 			}
 		} else {
-			// Packet length was validated above, so decodePcm16 cannot run out of
-			// bounds and the sample count is a whole number of frames.
-			const decoded = decodePcm16(
+			// Packet length was validated above. renderPacket writes straight into
+			// the output ring buffer (no per-packet allocation in this callback).
+			renderPacket(
+				pcmL16out,
+				bufferIndex,
 				buffer,
 				headerLength,
 				samplesPerPacket,
 				args.channels,
-				bytesPerSample
+				bytesPerSample,
+				outputMode,
+				outChannels,
+				monoGain
 			);
-			const mixed =
-				outputMode === "mono"
-					? mixdown(decoded, args.channels, outChannels, monoGain)
-					: mapChannels(decoded, args.channels, outChannels);
-			for (let i = 0; i < mixed.length; i++) {
-				pcmL16out.writeInt16LE(mixed[i], bufferIndex + i * 2);
-			}
 		}
 
 		if (seqInternal != -1) {

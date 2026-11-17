@@ -157,6 +157,72 @@ function mixdown(samples, srcChannels, outChannels, gain = 1) {
 	return out;
 }
 
+/**
+ * Allocation-free version of decodePcm16 + (mapChannels | mixdown) for the UDP
+ * receive callback: reads the validated RTP payload and writes interleaved
+ * little-endian Int16 output frames straight into `out` at `outOffset`, without
+ * creating any array. Result is the same as the helpers above (tested).
+ * mode "mono": sum of all source channels * gain, hard limited, on every output
+ * channel. Any other mode (multichannel): source channel n -> output channel n,
+ * extra source channels dropped, missing ones written as silence (so stale data
+ * in a reused output buffer is overwritten).
+ * Throws RangeError if the packet or the output buffer is too small.
+ */
+function renderPacket(
+	out,
+	outOffset,
+	buffer,
+	headerLength,
+	frames,
+	srcChannels,
+	bytesPerSample,
+	mode,
+	outChannels,
+	gain = 1
+) {
+	if (bytesPerSample !== 2 && bytesPerSample !== 3) {
+		throw new Error("Unsupported bytesPerSample: " + bytesPerSample);
+	}
+	if (!Number.isInteger(srcChannels) || srcChannels < 1) {
+		throw new RangeError("Invalid source channel count: " + srcChannels);
+	}
+	if (!Number.isInteger(outChannels) || outChannels < 1) {
+		throw new RangeError("Invalid output channel count: " + outChannels);
+	}
+	if (headerLength + frames * srcChannels * bytesPerSample > buffer.length) {
+		throw new RangeError("Packet shorter than frames * channels");
+	}
+	if (outOffset + frames * outChannels * 2 > out.length) {
+		throw new RangeError("Output buffer too small");
+	}
+
+	const mapped = Math.min(srcChannels, outChannels);
+	for (let f = 0; f < frames; f++) {
+		const inBase = headerLength + f * srcChannels * bytesPerSample;
+		const outBase = outOffset + f * outChannels * 2;
+		if (mode === "mono") {
+			let sum = 0;
+			for (let c = 0; c < srcChannels; c++) {
+				sum += buffer.readInt16BE(inBase + c * bytesPerSample);
+			}
+			const v = clamp16(Math.round(sum * gain));
+			for (let c = 0; c < outChannels; c++) {
+				out.writeInt16LE(v, outBase + c * 2);
+			}
+		} else {
+			for (let c = 0; c < mapped; c++) {
+				out.writeInt16LE(
+					buffer.readInt16BE(inBase + c * bytesPerSample),
+					outBase + c * 2
+				);
+			}
+			for (let c = mapped; c < outChannels; c++) {
+				out.writeInt16LE(0, outBase + c * 2);
+			}
+		}
+	}
+}
+
 module.exports = {
 	MODES,
 	availableModes,
@@ -165,4 +231,5 @@ module.exports = {
 	decodePcm16,
 	mapChannels,
 	mixdown,
+	renderPacket,
 };
