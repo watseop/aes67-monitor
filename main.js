@@ -117,6 +117,18 @@ function handleIpcMessage(message) {
 			};
 			audioProcess.send({ type: "start", data: playArgs });
 			break;
+		case "playGroup":
+			refreshCurrentAudioInterface();
+			audioProcess.send({
+				type: "startGroup",
+				data: {
+					...message.data,
+					audioAPI: audioAPI,
+					networkInterface: currentNetworkInterface.address,
+					selected: currentAudioDevice,
+				},
+			});
+			break;
 		case "stop":
 			audioProcess.send({ type: "stop" });
 			break;
@@ -374,6 +386,8 @@ sdpProcess.on("message", (data) => {
 audioProcess.on("message", (message) => {
 	if (message && message.type === "levels") {
 		sendMessage("levels", message.data);
+	} else if (message && message.type === "groupPlayback") {
+		sendMessage("groupPlayback", message.data);
 	}
 });
 
