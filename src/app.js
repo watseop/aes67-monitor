@@ -384,7 +384,9 @@ const groupPlayArgs = (group) => {
 	return {
 		key: group.key,
 		streams: list,
-		mode: getGroupMode(group),
+		// Unset = best mode of the device that is current when playback starts
+		// (also after a device change restart), same rule as getGroupMode().
+		mode: groupMode.value[group.key] || null,
 		pair,
 		jitterBufferEnabled: persistentData.value.settings.bufferEnabled,
 		jitterBufferSize: persistentData.value.settings.bufferSize,
