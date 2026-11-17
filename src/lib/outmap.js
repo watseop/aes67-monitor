@@ -7,9 +7,10 @@
  *  - "multi":  group channel i -> output channel i, in order. Channels beyond
  *              the device's output channels are dropped, unused outputs stay silent.
  *  - "stereo": one chosen pair of group channels -> L/R.
- *  - "mono":   every group channel is summed (downmix) and sent to L and R
- *              (or to the only output on a 1-channel device). The sum is
- *              hard-clipped to the 16-bit range; many loud channels will clip.
+ *  - "mono":   every group channel is mixed down and sent to L and R (or to the
+ *              only output on a 1-channel device). The mix is the average of all
+ *              group channels (gain 1 / groupChannels; user decision 2026-11-17),
+ *              so it cannot clip, but it is quieter when few channels carry signal.
  *
  * Payload layout: RFC 3551 §4.1 / §4.5.11 (interleaved, signed, big endian),
  * RFC 3190 for L24. Like audio.js, playback uses the top 16 bits of a sample.
@@ -38,6 +39,14 @@ function outputChannelCount(mode, groupChannels, outputChannels) {
 		default:
 			throw new Error("Unknown output mode: " + mode);
 	}
+}
+
+/**
+ * Gain applied to the mixed output. Mono averages all group channels; the other
+ * modes copy channels one to one (gain 1).
+ */
+function outputGain(mode, groupChannels) {
+	return mode === "mono" && groupChannels > 1 ? 1 / groupChannels : 1;
 }
 
 /**
@@ -84,10 +93,12 @@ function buildRoutes(mode, groupChannels, outChannels, pair) {
  * @param {Array<null|{buffer: Buffer, headerLength: number}>} packets - one
  *   per member; null = member packet missing, its channels are silent.
  * @param {Object} cfg - { members: [{channels, bytesPerSample, offset}], routes,
- *   outChannels, frames }; offset = index of the member's first group channel.
+ *   outChannels, frames, gain }; offset = index of the member's first group
+ *   channel; gain (default 1) scales the mixed sum, see outputGain().
  */
 function mixPackets(out, acc, packets, cfg) {
 	const { members, routes, outChannels, frames } = cfg;
+	const gain = cfg.gain === undefined ? 1 : cfg.gain;
 	const total = frames * outChannels;
 	acc.fill(0, 0, total);
 
@@ -115,7 +126,7 @@ function mixPackets(out, acc, packets, cfg) {
 	}
 
 	for (let i = 0; i < total; i++) {
-		const v = acc[i];
+		const v = gain === 1 ? acc[i] : Math.round(acc[i] * gain);
 		out.writeInt16LE(v > 32767 ? 32767 : v < -32768 ? -32768 : v, i * 2);
 	}
 }
@@ -124,6 +135,7 @@ module.exports = {
 	MODES,
 	availableModes,
 	outputChannelCount,
+	outputGain,
 	buildRoutes,
 	mixPackets,
 };
