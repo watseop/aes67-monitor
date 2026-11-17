@@ -3,6 +3,7 @@ const assert = require("node:assert");
 const {
 	availableModes,
 	outputChannelCount,
+	outputGain,
 	buildRoutes,
 	mixPackets,
 } = require("../src/lib/outmap.js");
@@ -35,6 +36,7 @@ function run(mode, members, values, outDevice, pair, bps = 2) {
 		routes: buildRoutes(mode, groupCh, outCh, pair),
 		outChannels: outCh,
 		frames,
+		gain: outputGain(mode, groupCh),
 	};
 	const out = Buffer.alloc(frames * outCh * 2);
 	const acc = new Int32Array(frames * outCh);
@@ -106,17 +108,25 @@ test("stereo sends the chosen pair across members to L/R", () => {
 	);
 });
 
-test("mono sums every channel to both outputs and clips", () => {
+test("mono averages every channel onto all outputs", () => {
+	// (100 + 200 - 50) / 3 = 83.33 -> 83
+	assert.deepStrictEqual(run("mono", [2, 1], [[100, 200], [-50]], 2), [83, 83]);
+	assert.deepStrictEqual(run("mono", [2, 1], [[100, 200], [-50]], 1), [83]);
+	// Cannot clip: the average of full scale channels is full scale.
+	assert.deepStrictEqual(run("mono", [2], [[32767, 32767]], 2), [32767, 32767]);
 	assert.deepStrictEqual(
-		run("mono", [2, 1], [[100, 200], [-50]], 2),
-		[250, 250]
-	);
-	assert.deepStrictEqual(run("mono", [2, 1], [[100, 200], [-50]], 1), [250]);
-	assert.deepStrictEqual(run("mono", [2], [[30000, 30000]], 2), [32767, 32767]);
-	assert.deepStrictEqual(
-		run("mono", [2], [[-30000, -30000]], 2),
+		run("mono", [2], [[-32768, -32768]], 2),
 		[-32768, -32768]
 	);
+	// One loud channel out of 4 is a quarter of its level.
+	assert.deepStrictEqual(run("mono", [4], [[8000, 0, 0, 0]], 2), [2000, 2000]);
+});
+
+test("outputGain is 1/channels for mono and 1 otherwise", () => {
+	assert.strictEqual(outputGain("mono", 12), 1 / 12);
+	assert.strictEqual(outputGain("mono", 1), 1);
+	assert.strictEqual(outputGain("multi", 12), 1);
+	assert.strictEqual(outputGain("stereo", 12), 1);
 });
 
 test("missing member is silent, L24 uses the top 16 bits", () => {
