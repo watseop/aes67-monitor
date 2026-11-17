@@ -75,3 +75,14 @@ test("mixdown limits to the Int16 range and supports gain", () => {
 		[30000, -30000]
 	);
 });
+
+test("mapChannels and mixdown reject partial frames and bad channel counts", () => {
+	const partial = Int16Array.from([1, 2, 3]);
+	for (const fn of [m.mapChannels, m.mixdown]) {
+		assert.throws(() => fn(partial, 2, 2), RangeError);
+		assert.throws(() => fn(partial, 0, 2), RangeError);
+		assert.throws(() => fn(partial, 1.5, 2), RangeError);
+		assert.throws(() => fn(partial, 3, 0), RangeError);
+		assert.strictEqual(fn(new Int16Array(0), 2, 2).length, 0);
+	}
+});

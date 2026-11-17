@@ -93,12 +93,37 @@ function decodePcm16(buffer, headerLength, frames, channels, bytesPerSample) {
 }
 
 /**
+ * Throws unless `samples` holds whole frames of `srcChannels` channels and
+ * `outChannels` is a positive integer. A channel count mismatch must not be
+ * hidden by dropping a partial last frame.
+ * @returns {number} frame count
+ */
+function checkFrames(samples, srcChannels, outChannels) {
+	if (!Number.isInteger(srcChannels) || srcChannels < 1) {
+		throw new RangeError("Invalid source channel count: " + srcChannels);
+	}
+	if (!Number.isInteger(outChannels) || outChannels < 1) {
+		throw new RangeError("Invalid output channel count: " + outChannels);
+	}
+	if (samples.length % srcChannels !== 0) {
+		throw new RangeError(
+			"Incomplete frame: " +
+				samples.length +
+				" samples, " +
+				srcChannels +
+				" channels"
+		);
+	}
+	return samples.length / srcChannels;
+}
+
+/**
  * Maps interleaved source channels to `outChannels` outputs in order: source
  * channel n goes to output n. Extra source channels are dropped, missing ones
- * are silent.
+ * are silent. Throws RangeError for partial frames or invalid channel counts.
  */
 function mapChannels(samples, srcChannels, outChannels) {
-	const frames = Math.floor(samples.length / srcChannels);
+	const frames = checkFrames(samples, srcChannels, outChannels);
 	const out = new Int16Array(frames * outChannels);
 	const n = Math.min(srcChannels, outChannels);
 	for (let f = 0; f < frames; f++) {
@@ -117,7 +142,7 @@ function mapChannels(samples, srcChannels, outChannels) {
  * average (never clips, quieter when few channels carry signal).
  */
 function mixdown(samples, srcChannels, outChannels, gain = 1) {
-	const frames = Math.floor(samples.length / srcChannels);
+	const frames = checkFrames(samples, srcChannels, outChannels);
 	const out = new Int16Array(frames * outChannels);
 	for (let f = 0; f < frames; f++) {
 		let sum = 0;
