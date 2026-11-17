@@ -38,6 +38,21 @@
 				/>
 				<span class="input-group-text">packets</span>
 			</div>
+			<h5 class="mb-3 mt-4">Output Mode</h5>
+			<select class="form-select" id="outputModeSelect" v-model="outputMode">
+				<option
+					v-for="mode in outputModes"
+					:key="mode.value"
+					:value="mode.value"
+					:disabled="!mode.available"
+				>
+					{{ mode.label }}
+				</option>
+			</select>
+			<div class="form-text mb-3">
+				Multichannel needs an output device with more than 2 channels. Mono
+				mixes all channels together and plays them on both sides.
+			</div>
 		</div>
 		<div class="col-4">
 			<h5 class="mb-3">Other</h5>
@@ -84,14 +99,38 @@
 </template>
 
 <script>
-import { persistentData, networkInterfaces } from "../../app.js";
+import {
+	persistentData,
+	networkInterfaces,
+	getCurrentAudioOutput,
+} from "../../app.js";
+import { availableModes } from "../../lib/outputmode.js";
+import { computed } from "vue";
 
 export default {
 	name: "SettingsPage",
 	setup() {
+		// Settings saved before this option existed have no outputMode: stereo.
+		const outputMode = computed({
+			get: () => persistentData.value.settings.outputMode || "stereo",
+			set: (value) => {
+				persistentData.value.settings.outputMode = value;
+			},
+		});
+		const outputModes = computed(() => {
+			const device = getCurrentAudioOutput()[0];
+			const offered = availableModes(device ? device.outputChannels : 2);
+			return [
+				{ value: "multichannel", label: "Multichannel (all channels)" },
+				{ value: "stereo", label: "Stereo (selected channel pair)" },
+				{ value: "mono", label: "Mono (downmix to both sides)" },
+			].map((mode) => ({ ...mode, available: offered.includes(mode.value) }));
+		});
 		return {
 			persistentData,
 			networkInterfaces,
+			outputMode,
+			outputModes,
 		};
 	},
 };

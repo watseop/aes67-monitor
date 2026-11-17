@@ -1,6 +1,13 @@
 const { RtAudio, RtAudioFormat } = require("audify");
 const dgram = require("dgram");
 const { LevelMeter } = require("./level.js");
+const {
+	resolveMode,
+	outputChannelCount,
+	decodePcm16,
+	mapChannels,
+	mixdown,
+} = require("./outputmode.js");
 
 let rtAudio;
 let client;
@@ -41,12 +48,65 @@ const start = function (args) {
 		client.addMembership(args.mcast, args.networkInterface);
 	});
 
+	rtAudio = new RtAudio(args.audioAPI);
+	let devices = rtAudio.getDevices();
+	let id;
+	let deviceOutputChannels = 2;
+	let found = false;
+	let defaultOutputDevice;
+
+	for (let i = 0; i < devices.length; i++) {
+		if (
+			devices[i].name == args.selected.name &&
+			devices[i].inputChannels == args.selected.inputChannels &&
+			devices[i].outputChannels == args.selected.outputChannels
+		) {
+			console.log("Found device: " + devices[i].name);
+			id = devices[i].id;
+			deviceOutputChannels = devices[i].outputChannels;
+			found = true;
+			break;
+		}
+
+		if (devices[i].isDefaultOutput && devices[i].outputChannels >= 2) {
+			defaultOutputDevice = devices[i];
+		}
+	}
+
+	if (!found) {
+		console.log("Falling back to default device");
+		id = defaultOutputDevice.id;
+		deviceOutputChannels = defaultOutputDevice.outputChannels;
+	}
+
 	// Constants
 	const bufferSize = 1024;
 	const samplesPerPacket = Math.round((args.samplerate / 1000) * args.ptime);
 	const bytesPerSample = args.codec == "L24" ? 3 : 2;
 	const pcmDataSize = samplesPerPacket * bytesPerSample * args.channels;
-	const pcmL16out = Buffer.alloc(samplesPerPacket * 4 * bufferSize);
+
+	// Output mode. deviceOutputChannels comes from the device chosen above (the
+	// default device if the selected one was not found). "stereo" keeps the
+	// original path (the two selected source channels). "mono" mixes all source
+	// channels down to one signal sent to both sides; "multichannel" maps source
+	// channel n to output channel n. Modes the device cannot offer fall back to
+	// the default (see outputmode.js).
+	const outputMode = resolveMode(
+		args.outputMode || "stereo",
+		deviceOutputChannels
+	);
+	const outChannels = outputChannelCount(
+		outputMode,
+		args.channels,
+		deviceOutputChannels
+	);
+	// Int16 output, interleaved: bytes per output frame.
+	const outFrameBytes = outChannels * 2;
+	// Mono mix gain: 1 = plain sum (hard limited to Int16). Open decision, see
+	// docs/ROADMAP.md; average would be 1 / args.channels.
+	const monoGain = 1;
+	console.log("Output mode:", outputMode, "output channels:", outChannels);
+	const pcmL16out = Buffer.alloc(samplesPerPacket * outFrameBytes * bufferSize);
 
 	// Meters every channel of the stream (not only the two routed to the output)
 	// so a silent source channel is visible.
@@ -99,29 +159,50 @@ const start = function (args) {
 		meter.push(buffer, headerLength, samplesPerPacket);
 
 		let seqNum = buffer.readUInt16BE(2);
-		let bufferIndex = (seqNum % bufferSize) * samplesPerPacket * 4;
+		let bufferIndex = (seqNum % bufferSize) * samplesPerPacket * outFrameBytes;
 
-		for (let sample = 0; sample < samplesPerPacket; sample++) {
-			pcmL16out.writeUInt16LE(
-				buffer.readUInt16BE(
-					(sample * args.channels + args.ch1Map) * bytesPerSample + headerLength
-				),
-				sample * 4 + bufferIndex
+		if (outputMode === "stereo") {
+			for (let sample = 0; sample < samplesPerPacket; sample++) {
+				pcmL16out.writeUInt16LE(
+					buffer.readUInt16BE(
+						(sample * args.channels + args.ch1Map) * bytesPerSample +
+							headerLength
+					),
+					sample * 4 + bufferIndex
+				);
+				pcmL16out.writeUInt16LE(
+					buffer.readUInt16BE(
+						(sample * args.channels + args.ch2Map) * bytesPerSample +
+							headerLength
+					),
+					sample * 4 + bufferIndex + 2
+				);
+			}
+		} else {
+			// Packet length was validated above, so decodePcm16 cannot run out of
+			// bounds and the sample count is a whole number of frames.
+			const decoded = decodePcm16(
+				buffer,
+				headerLength,
+				samplesPerPacket,
+				args.channels,
+				bytesPerSample
 			);
-			pcmL16out.writeUInt16LE(
-				buffer.readUInt16BE(
-					(sample * args.channels + args.ch2Map) * bytesPerSample + headerLength
-				),
-				sample * 4 + bufferIndex + 2
-			);
+			const mixed =
+				outputMode === "mono"
+					? mixdown(decoded, args.channels, outChannels, monoGain)
+					: mapChannels(decoded, args.channels, outChannels);
+			for (let i = 0; i < mixed.length; i++) {
+				pcmL16out.writeInt16LE(mixed[i], bufferIndex + i * 2);
+			}
 		}
 
 		if (seqInternal != -1) {
 			if (outSampleFactor == 1 || seqInternal % outSampleFactor == 0) {
-				let bufferIndex = seqInternal * samplesPerPacket * 4;
+				let bufferIndex = seqInternal * samplesPerPacket * outFrameBytes;
 				let outBuf = pcmL16out.subarray(
 					bufferIndex,
-					bufferIndex + samplesPerPacket * 4 * outSampleFactor
+					bufferIndex + samplesPerPacket * outFrameBytes * outSampleFactor
 				);
 				rtAudio.write(outBuf);
 			}
@@ -131,7 +212,9 @@ const start = function (args) {
 
 			for (var j = 0; j < jitterBufferSize; j++) {
 				try {
-					rtAudio.write(Buffer.alloc(samplesPerPacket * 4 * outSampleFactor));
+					rtAudio.write(
+						Buffer.alloc(samplesPerPacket * outFrameBytes * outSampleFactor)
+					);
 				} catch (error) {
 					console.error("Error writing sample:", error);
 				}
@@ -139,37 +222,9 @@ const start = function (args) {
 		}
 	});
 
-	rtAudio = new RtAudio(args.audioAPI);
-	let devices = rtAudio.getDevices();
-	let id;
-	let found = false;
-	let defaultOutputDevice;
-
-	for (let i = 0; i < devices.length; i++) {
-		if (
-			devices[i].name == args.selected.name &&
-			devices[i].inputChannels == args.selected.inputChannels &&
-			devices[i].outputChannels == args.selected.outputChannels
-		) {
-			console.log("Found device: " + devices[i].name);
-			id = devices[i].id;
-			found = true;
-			break;
-		}
-
-		if (devices[i].isDefaultOutput && devices[i].outputChannels >= 2) {
-			defaultOutputDevice = devices[i];
-		}
-	}
-
-	if (!found) {
-		console.log("Falling back to default device");
-		id = defaultOutputDevice.id;
-	}
-
 	try {
 		rtAudio.openStream(
-			{ deviceId: id, nChannels: 2, firstChannel: 0 },
+			{ deviceId: id, nChannels: outChannels, firstChannel: 0 },
 			null,
 			RtAudioFormat.RTAUDIO_SINT16,
 			args.samplerate,

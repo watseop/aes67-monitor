@@ -33,6 +33,7 @@ export const persistentData = ref({
 	settings: {
 		bufferSize: 16,
 		bufferEnabled: true,
+		outputMode: "stereo",
 		hideUnsupported: true,
 		sdpDeleteTimeout: 300,
 		sidebarCollapsed: false,
@@ -339,6 +340,9 @@ const reconcileGroupMonitor = () => {
 	}
 };
 
+// Output mode of the stream that is playing (to restart only on a change).
+let activeOutputMode = "stereo";
+
 export const playStream = (stream) => {
 	levels.value = null;
 	if (playing.value == stream.id) {
@@ -371,6 +375,7 @@ export const playStream = (stream) => {
 				filterAddr = stream.media[streamMapping].sourceFilter.srcList;
 			}
 
+			activeOutputMode = persistentData.value.settings.outputMode || "stereo";
 			let data = {
 				id: stream.id,
 				mcast: mcast,
@@ -383,6 +388,7 @@ export const playStream = (stream) => {
 				ch2Map: channel1,
 				jitterBufferEnabled: persistentData.value.settings.bufferEnabled,
 				jitterBufferSize: persistentData.value.settings.bufferSize,
+				outputMode: activeOutputMode,
 				filter: filter,
 				filterAddr: filterAddr,
 			};
@@ -434,6 +440,13 @@ export const saveSettings = () => {
 	const address = document.getElementById("networkSelect").value;
 	updatePersistentData("settings");
 	sendMessage({ type: "setNetwork", data: address });
+	const outputMode = persistentData.value.settings.outputMode || "stereo";
+	if (playing.value != "" && outputMode !== activeOutputMode) {
+		// Apply a changed output mode to the stream that is playing. Only when it
+		// changed: a restart interrupts the audio.
+		activeOutputMode = outputMode;
+		sendMessage({ type: "restart", data: { outputMode } });
+	}
 	page.value = "streams";
 };
 

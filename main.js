@@ -17,6 +17,7 @@ let persistentData = store.get("persistentData", {
 	settings: {
 		bufferSize: 16,
 		bufferEnabled: true,
+		outputMode: "stereo",
 		hideUnsupported: true,
 		sdpDeleteTimeout: 300,
 		sidebarCollapsed: false,
@@ -104,6 +105,9 @@ function handleIpcMessage(message) {
 				data: {
 					networkInterface: currentNetworkInterface.address,
 					selected: currentAudioDevice,
+					...(message.data && message.data.outputMode
+						? { outputMode: message.data.outputMode }
+						: {}),
 				},
 			});
 			break;
