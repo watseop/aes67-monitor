@@ -1,5 +1,6 @@
 import { ref, computed } from "vue";
 import { findGroups } from "./lib/groups.js";
+import { availableModes } from "./lib/outmap.js";
 
 export const page = ref("streams");
 export const search = ref({ streams: "", interfaces: "", devices: "" });
@@ -294,6 +295,10 @@ const stopGroupMonitor = () => {
 
 export const toggleGroupMonitor = (group) => {
 	groupLevels.value = null;
+	if (playingGroup.value === group.key) {
+		// Already metered by playback.
+		return;
+	}
 	if (monitoredGroup.value === group.key) {
 		stopGroupMonitor();
 		return;
@@ -339,8 +344,123 @@ const reconcileGroupMonitor = () => {
 	}
 };
 
+// Group playback: every member of a group is played at once through one
+// output stream, in the selected output mode (see lib/outmap.js). One group
+// or one single stream plays at a time (they share the audio process).
+export const playingGroup = ref("");
+// {key, mode, outChannels, alignment, dropped, missing, members: [...levels]}
+export const groupPlaybackInfo = ref(null);
+// group key -> "multi" | "stereo" | "mono"
+export const groupMode = ref({});
+// group key -> "left,right" group channel indexes (stereo mode)
+export const groupPair = ref({});
+
+export const getGroupModes = () => {
+	const dev = getCurrentAudioOutput();
+	return availableModes(dev.length > 0 ? dev[0].outputChannels : 2);
+};
+
+export const getGroupMode = (group) => {
+	const modes = getGroupModes();
+	const m = groupMode.value[group.key];
+	return modes.includes(m) ? m : modes[0];
+};
+
+export const getGroupPairs = (group) => {
+	const pairs = [];
+	for (let i = 0; i + 1 < group.channels; i += 2) {
+		pairs.push({ value: i + "," + (i + 1), string: i + 1 + " + " + (i + 2) });
+	}
+	if (pairs.length === 0) pairs.push({ value: "0,0", string: "1" });
+	return pairs;
+};
+
+const groupPlayArgs = (group) => {
+	const list = monitorStreams(group);
+	if (!list) return null;
+	const pair = (groupPair.value[group.key] || getGroupPairs(group)[0].value)
+		.split(",")
+		.map((x) => parseInt(x, 10));
+	return {
+		key: group.key,
+		streams: list,
+		// Unset = best mode of the device that is current when playback starts
+		// (also after a device change restart), same rule as getGroupMode().
+		mode: groupMode.value[group.key] || null,
+		pair,
+		jitterBufferEnabled: persistentData.value.settings.bufferEnabled,
+		jitterBufferSize: persistentData.value.settings.bufferSize,
+	};
+};
+
+export const togglePlayGroup = (group) => {
+	groupPlaybackInfo.value = null;
+	if (playingGroup.value === group.key) {
+		playingGroup.value = "";
+		playingSignature = "";
+		sendMessage({ type: "stop" });
+		return;
+	}
+	const data = groupPlayArgs(group);
+	if (!data) return;
+	// Playback reports levels itself; the separate monitor is not needed.
+	if (monitoredGroup.value) stopGroupMonitor();
+	playing.value = "";
+	levels.value = null;
+	playingGroup.value = group.key;
+	playingSignature = JSON.stringify(data.streams);
+	sendMessage({ type: "playGroup", data });
+};
+
+// Mode or pair changed while playing: restart with the new routing.
+export const updateGroupPlayback = (group) => {
+	if (playingGroup.value !== group.key) return;
+	const data = groupPlayArgs(group);
+	if (data) sendMessage({ type: "playGroup", data });
+};
+
+// Same as reconcileGroupMonitor, for the playing group.
+let playingSignature = "";
+const reconcileGroupPlayback = () => {
+	if (!playingGroup.value) {
+		playingSignature = "";
+		return;
+	}
+	let group = null;
+	for (const g of findGroups(streams.value).values()) {
+		if (g.key === playingGroup.value) {
+			group = g;
+			break;
+		}
+	}
+	const list = group ? monitorStreams(group) : null;
+	if (!list) {
+		playingGroup.value = "";
+		groupPlaybackInfo.value = null;
+		playingSignature = "";
+		sendMessage({ type: "stop" });
+		return;
+	}
+	const signature = JSON.stringify(list);
+	if (playingSignature && signature !== playingSignature) {
+		updateGroupPlayback(group);
+	}
+	playingSignature = signature;
+};
+
+let groupPlaybackUpdatedAt = 0;
+setInterval(() => {
+	if (groupPlaybackInfo.value && Date.now() - groupPlaybackUpdatedAt > 1000) {
+		groupPlaybackInfo.value = null;
+	}
+}, 500);
+
 export const playStream = (stream) => {
 	levels.value = null;
+	if (playingGroup.value) {
+		playingGroup.value = "";
+		groupPlaybackInfo.value = null;
+	}
 	if (playing.value == stream.id) {
 		playing.value = "";
 		sendMessage({ type: "stop" });
@@ -408,7 +528,7 @@ export const setCurrentAudioInterface = (device) => {
 		},
 	});
 
-	if (playing.value != "") {
+	if (playing.value != "" || playingGroup.value != "") {
 		console.log("Triggering restart");
 		sendMessage({ type: "restart" });
 	}
@@ -444,6 +564,7 @@ if (window.electronAPI) {
 				streams.value = message.data;
 				streamCount.value = message.data.length;
 				reconcileGroupMonitor();
+				reconcileGroupPlayback();
 				break;
 			case "devices":
 				console.log("devices", message.data);
@@ -459,6 +580,12 @@ if (window.electronAPI) {
 				if (message.data.id === playing.value) {
 					levels.value = message.data;
 					levelsUpdatedAt = Date.now();
+				}
+				break;
+			case "groupPlayback":
+				if (message.data.key === playingGroup.value) {
+					groupPlaybackInfo.value = message.data;
+					groupPlaybackUpdatedAt = Date.now();
 				}
 				break;
 			case "groupLevels":

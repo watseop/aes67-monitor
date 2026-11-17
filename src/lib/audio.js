@@ -1,6 +1,7 @@
 const { RtAudio, RtAudioFormat } = require("audify");
 const dgram = require("dgram");
 const { LevelMeter } = require("./level.js");
+const groupPlayback = require("./multiplay.js");
 
 let rtAudio;
 let client;
@@ -19,7 +20,12 @@ const stopMeter = function () {
 	}
 };
 
+// Last group playback args, for restart on audio device change.
+let groupArgs = null;
+
 const start = function (args) {
+	groupArgs = null;
+	groupPlayback.stop();
 	argsCache = args;
 	stopMeter();
 	if (streamOpen) {
@@ -189,7 +195,17 @@ const start = function (args) {
 	}
 };
 
+const startGroup = (args) => {
+	stop();
+	groupArgs = args;
+	groupPlayback.start(args);
+};
+
 const restart = (args) => {
+	if (groupArgs) {
+		startGroup(Object.assign({}, groupArgs, args));
+		return;
+	}
 	if (streamOpen) {
 		argsCache = Object.assign({}, argsCache, args);
 		start(argsCache);
@@ -197,6 +213,8 @@ const restart = (args) => {
 };
 
 const stop = function () {
+	groupArgs = null;
+	groupPlayback.stop();
 	stopMeter();
 	if (streamOpen) {
 		streamOpen = false;
@@ -214,6 +232,9 @@ process.on("message", (message) => {
 			break;
 		case "restart":
 			restart(message.data);
+			break;
+		case "startGroup":
+			startGroup(message.data);
 			break;
 		case "stop":
 			stop();

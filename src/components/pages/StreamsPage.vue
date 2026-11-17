@@ -88,12 +88,70 @@
 							{{ row.group.channels }}
 						</span>
 					</td>
-					<td></td>
+					<td>
+						<div class="d-flex gap-1">
+							<select
+								class="form-select form-select-sm"
+								title="Output mode for group playback"
+								:value="getGroupMode(row.group)"
+								@change="
+									groupMode[row.group.key] = $event.target.value;
+									updateGroupPlayback(row.group);
+								"
+							>
+								<option v-for="m in getGroupModes()" :key="m" :value="m">
+									{{ modeLabel(m) }}
+								</option>
+							</select>
+							<select
+								v-if="getGroupMode(row.group) === 'stereo'"
+								class="form-select form-select-sm"
+								title="Group channels sent to L / R"
+								:value="
+									groupPair[row.group.key] || getGroupPairs(row.group)[0].value
+								"
+								@change="
+									groupPair[row.group.key] = $event.target.value;
+									updateGroupPlayback(row.group);
+								"
+							>
+								<option
+									v-for="p in getGroupPairs(row.group)"
+									:key="p.value"
+									:value="p.value"
+								>
+									{{ p.string }}
+								</option>
+							</select>
+						</div>
+					</td>
 					<td v-if="streamCount > 0"></td>
 					<td></td>
-					<td>
+					<td class="text-nowrap">
+						<button
+							class="btn btn-sm me-1"
+							:class="
+								playingGroup === row.group.key ? 'btn-danger' : 'btn-success'
+							"
+							:title="
+								playingGroup === row.group.key
+									? 'Stop group playback'
+									: 'Play all channels of the group'
+							"
+							@click="togglePlayGroup(row.group)"
+						>
+							<i
+								class="bi"
+								:class="
+									playingGroup === row.group.key
+										? 'bi-stop-fill'
+										: 'bi-play-fill'
+								"
+							></i>
+						</button>
 						<button
 							class="btn btn-sm"
+							:disabled="playingGroup === row.group.key"
 							:class="
 								monitoredGroup === row.group.key ? 'btn-danger' : 'btn-success'
 							"
@@ -115,8 +173,27 @@
 						</button>
 					</td>
 				</tr>
-				<tr v-if="row.group && monitoredGroup === row.group.key">
+				<tr
+					v-if="
+						row.group &&
+						(monitoredGroup === row.group.key || playingGroup === row.group.key)
+					"
+				>
 					<td colspan="9" class="pt-0">
+						<div
+							v-if="
+								playingGroup === row.group.key &&
+								groupPlaybackInfo &&
+								groupPlaybackInfo.key === row.group.key
+							"
+							class="text-muted small mb-1"
+						>
+							{{ modeLabel(groupPlaybackInfo.mode) }},
+							{{ groupPlaybackInfo.outChannels }} output ch, aligned by
+							{{ groupPlaybackInfo.alignment }}, dropped
+							{{ groupPlaybackInfo.dropped }}, missing
+							{{ groupPlaybackInfo.missing }}
+						</div>
 						<div v-if="!groupStrip(row.group)" class="text-muted small">
 							Waiting for packets...
 						</div>
@@ -353,6 +430,15 @@ import {
 	monitoredGroup,
 	groupLevels,
 	toggleGroupMonitor,
+	playingGroup,
+	groupPlaybackInfo,
+	groupMode,
+	groupPair,
+	getGroupModes,
+	getGroupMode,
+	getGroupPairs,
+	togglePlayGroup,
+	updateGroupPlayback,
 } from "../../app.js";
 import { buildRows, groupRanges } from "../../lib/groups.js";
 import { ref, computed } from "vue";
@@ -421,7 +507,10 @@ export default {
 		// One bar per channel of the whole group, numbered by the first channel
 		// parsed from each member's name. null until the first report arrives.
 		function groupStrip(group) {
-			const gl = groupLevels.value;
+			const gl =
+				playingGroup.value === group.key
+					? groupPlaybackInfo.value
+					: groupLevels.value;
 			if (!gl || gl.key !== group.key) return null;
 			const out = [];
 			group.members.forEach((member, i) => {
@@ -437,6 +526,10 @@ export default {
 				});
 			});
 			return out.length ? out : null;
+		}
+
+		function modeLabel(mode) {
+			return { multi: "Multichannel", stereo: "Stereo", mono: "Mono" }[mode];
 		}
 
 		const sortedStreams = computed(() => {
@@ -481,6 +574,16 @@ export default {
 			monitoredGroup,
 			toggleGroupMonitor,
 			groupStrip,
+			playingGroup,
+			groupPlaybackInfo,
+			groupMode,
+			groupPair,
+			getGroupModes,
+			getGroupMode,
+			getGroupPairs,
+			togglePlayGroup,
+			updateGroupPlayback,
+			modeLabel,
 			silentDb,
 			levelPercent,
 			levelClass,
