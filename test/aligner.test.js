@@ -84,3 +84,80 @@ test("arrival mode silences a member that stopped sending", () => {
 	a.push(0, 0, "a1");
 	assert.deepStrictEqual(a.pop(), ["a0", null]);
 });
+
+test("timestamp offset that is not a whole packet falls back to arrival", () => {
+	const a = new PacketAligner(2, 48);
+	const frames = [];
+	for (let i = 0; i < 20; i++) {
+		a.push(0, i * 48, "a" + i);
+		a.push(1, i * 48 + 1, "b" + i);
+		let f;
+		while ((f = a.pop()) !== null) frames.push(f);
+	}
+	assert.strictEqual(a.mode, "arrival");
+	// member 1 is not lost: every later frame has both members
+	assert.deepStrictEqual(frames[frames.length - 1], ["a19", "b19"]);
+	assert.ok(frames.filter((f) => f[1] !== null).length >= 18);
+});
+
+test("reordered packets inside the playout window are not dropped", () => {
+	const a = new PacketAligner(2, 48);
+	const frames = [];
+	const feed = (ts) => {
+		a.push(0, ts, "a" + ts);
+		a.push(1, ts, "b" + ts);
+		let f;
+		while ((f = a.pop()) !== null) frames.push(f);
+	};
+	feed(0);
+	feed(96);
+	feed(48);
+	feed(144);
+	assert.deepStrictEqual(frames, [
+		["a0", "b0"],
+		["a48", "b48"],
+		["a96", "b96"],
+		["a144", "b144"],
+	]);
+	assert.strictEqual(a.dropped, 0);
+});
+
+test("a packet lost on every member becomes one silent frame", () => {
+	const a = new PacketAligner(2, 48, { maxWait: 2 });
+	const frames = [];
+	for (const ts of [0, 96, 144, 192]) {
+		a.push(0, ts, "a" + ts);
+		a.push(1, ts, "b" + ts);
+		let f;
+		while ((f = a.pop()) !== null) frames.push(f);
+	}
+	assert.deepStrictEqual(frames.slice(0, 3), [
+		["a0", "b0"],
+		[null, null],
+		["a96", "b96"],
+	]);
+});
+
+test("a long gap resyncs instead of emitting a burst of silence", () => {
+	const a = new PacketAligner(2, 48, { maxWait: 2, maxDepth: 8 });
+	const frames = [];
+	for (const ts of [0, 48000, 48048, 48096]) {
+		a.push(0, ts, "a" + ts);
+		a.push(1, ts, "b" + ts);
+		let f;
+		while ((f = a.pop()) !== null) frames.push(f);
+	}
+	assert.deepStrictEqual(frames.slice(0, 2), [
+		["a0", "b0"],
+		["a48000", "b48000"],
+	]);
+	assert.strictEqual(a.mode, "timestamp");
+});
+
+test("duplicate packet is ignored", () => {
+	const a = new PacketAligner(1, 48);
+	a.push(0, 0, "x");
+	a.push(0, 0, "dup");
+	assert.strictEqual(a.queues[0].length, 1);
+	assert.strictEqual(a.dropped, 1);
+});

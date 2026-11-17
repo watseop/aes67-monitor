@@ -39,7 +39,20 @@ class PacketAligner {
 
 	push(member, timestamp, data) {
 		const q = this.queues[member];
-		q.push({ ts: timestamp >>> 0, data });
+		const ts = timestamp >>> 0;
+		if (this.mode === "arrival") {
+			q.push({ ts, data });
+		} else {
+			// RFC 3550 §5.1 / §6.4: packets may be reordered in the network, so the
+			// queue is kept in timestamp order (insert from the end, usually O(1)).
+			let i = q.length;
+			while (i > 0 && diff32(q[i - 1].ts, ts) > 0) i--;
+			if (i > 0 && q[i - 1].ts === ts) {
+				this.dropped++; // duplicate
+				return;
+			}
+			q.splice(i, 0, { ts, data });
+		}
 		if (q.length > this.maxDepth) {
 			if (this.mode === "timestamp") {
 				this._toArrival();
@@ -99,18 +112,32 @@ class PacketAligner {
 		if (heads.length === this.n) {
 			const oldest = heads.reduce((a, b) => (diff32(b, a) < 0 ? b : a));
 			const newest = heads.reduce((a, b) => (diff32(b, a) > 0 ? b : a));
-			// Heads further apart than the queue can hold: the members do not
-			// share a timestamp base, so timestamps can never match.
-			if (diff32(newest, oldest) > this.maxDepth * this.step) {
+			// The members do not share a timestamp base when their heads are
+			// further apart than the queue can hold, or when they are not a whole
+			// number of packets apart (different clock offsets, AES67 §7.2
+			// a=mediaclk:direct): their timestamps can never match.
+			const offPhase = heads.some(
+				(h) => diff32(h, this.next) % this.step !== 0
+			);
+			if (diff32(newest, oldest) > this.maxDepth * this.step || offPhase) {
 				this._toArrival();
 				return this.pop();
 			}
-			// Nobody has the expected packet (all lost): jump to the oldest head.
-			if (!hasNext) this.next = oldest;
-		} else if (deepest < this.maxWait || !hasNext) {
-			// Wait for the empty members, or (no one has the cursor packet)
-			// until every member has data again.
-			return null;
+		}
+		if (!hasNext || heads.length < this.n) {
+			// Hold the playout window: a missing packet may still arrive out of
+			// order. Wait until one member has maxWait packets queued.
+			if (deepest < this.maxWait) return null;
+			if (!hasNext) {
+				const oldest = heads.reduce((a, b) => (diff32(b, a) < 0 ? b : a));
+				if (diff32(oldest, this.next) > this.maxDepth * this.step) {
+					// Long gap (source paused / restarted): resync instead of
+					// emitting a burst of silent frames.
+					this.next = oldest;
+				}
+				// Otherwise a short gap: the frame below is silence for every
+				// member, so the output timeline keeps its length.
+			}
 		}
 
 		const frame = qs.map((q) => {
