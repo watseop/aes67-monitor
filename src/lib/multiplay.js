@@ -16,6 +16,7 @@ const {
 	availableModes,
 	outputChannelCount,
 	buildRoutes,
+	outputGain,
 	mixPackets,
 } = require("./outmap.js");
 
@@ -107,7 +108,8 @@ function start(args) {
 		offset += s.channels;
 		return m;
 	});
-	const cfg = { members, routes, outChannels, frames };
+	const gain = outputGain(mode, groupChannels);
+	const cfg = { members, routes, outChannels, frames, gain };
 
 	// Write at least 48 samples per call, as audio.js does.
 	let factor = 1;
