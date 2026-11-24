@@ -1,6 +1,7 @@
 const dgram = require("dgram");
 const sdpTransform = require("sdp-transform");
 const crypto = require("crypto");
+const ravenna = require("./ravenna.js");
 
 const socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
 const supportedSampleRates = [16000, 32000, 44100, 48000, 88200, 96000, 192000];
@@ -9,6 +10,9 @@ let cb = function (error) {
 };
 let sessions = {};
 let deleteTimeout = 5 * 60 * 1000;
+let ravennaDiscovery = null;
+// session (service instance) name -> session id, for RAVENNA sessions only
+const ravennaIds = {};
 
 const preParse = function (sdp) {
 	//check if valid for playback
@@ -88,20 +92,20 @@ const isSupportedStream = function (sdp) {
 	return sdp;
 };
 
-socket.on("message", function (message) {
-	if (
-		message.length <= 24 ||
-		message.toString("ascii", 8, 23) != "application/sdp"
-	) {
-		return;
+// Handles one received SDP (from SAP or RAVENNA discovery): parse, give it an id
+// (same SDP origin = same stream, so SAP and RAVENNA copies merge) and store it.
+// Returns the session id, or null if the SDP was ignored.
+const receiveSdp = function (rawSDP, del, source) {
+	let sdp;
+	try {
+		sdp = sdpTransform.parse(rawSDP);
+	} catch (error) {
+		console.error("Error parsing SDP", error);
+		return null;
 	}
 
-	let rawSDP = message.toString("ascii", 24);
-	let sdp = sdpTransform.parse(rawSDP);
-	let del = (message.readUInt8(0) & 0x4) == 0x4;
-
 	if (!sdp.origin || !sdp.name) {
-		return;
+		return null;
 	}
 
 	sdp.raw = rawSDP;
@@ -111,19 +115,36 @@ socket.on("message", function (message) {
 		.digest("hex");
 	sdp.lastSeen = Date.now();
 	sdp.manual = false;
+	sdp.source = source;
 
 	if (del) {
 		delete sessions[sdp.id];
 		sendUpdate();
-		return;
+		return sdp.id;
 	}
 
 	if (sessions[sdp.id] && sessions[sdp.id].manual === true) {
-		return;
+		return sdp.id;
 	}
 
 	sessions[sdp.id] = preParse(sdp);
 	sendUpdate();
+	return sdp.id;
+};
+
+socket.on("message", function (message) {
+	if (
+		message.length <= 24 ||
+		message.toString("ascii", 8, 23) != "application/sdp"
+	) {
+		return;
+	}
+
+	receiveSdp(
+		message.toString("ascii", 24),
+		(message.readUInt8(0) & 0x4) == 0x4,
+		"sap"
+	);
 });
 
 socket.on("error", function (error) {
@@ -158,6 +179,43 @@ const announceStream = function (rawSDP, addr, header, del) {
 	});
 };
 
+// Starts (or restarts) RAVENNA discovery on the given interface address.
+const startRavenna = function (address) {
+	stopRavenna();
+	try {
+		ravennaDiscovery = ravenna.start({
+			interfaceAddress: address,
+			onSdp: function (rawSDP, instance) {
+				const id = receiveSdp(rawSDP, false, "ravenna");
+				if (id) {
+					ravennaIds[instance] = id;
+				}
+			},
+			onGone: function (instance) {
+				const id = ravennaIds[instance];
+				delete ravennaIds[instance];
+				// Only remove sessions that were learned from RAVENNA, not manual ones.
+				if (id && sessions[id] && sessions[id].source === "ravenna") {
+					delete sessions[id];
+					sendUpdate();
+				}
+			},
+		});
+	} catch (error) {
+		console.error("[RAVENNA] Could not start discovery:", error);
+	}
+};
+
+const stopRavenna = function () {
+	if (ravennaDiscovery) {
+		ravennaDiscovery.stop();
+		ravennaDiscovery = null;
+	}
+	for (const key of Object.keys(ravennaIds)) {
+		delete ravennaIds[key];
+	}
+};
+
 const init = function (address, callback) {
 	this.address = address;
 	cb = callback;
@@ -168,6 +226,7 @@ const init = function (address, callback) {
 	});
 
 	socket.bind(9875);
+	startRavenna(address);
 };
 
 const setNetworkInterface = function (address) {
@@ -188,6 +247,8 @@ const setNetworkInterface = function (address) {
 				delete sessions[keys[i]];
 			}
 		}
+		startRavenna(address);
+
 		try {
 			socket.setMulticastInterface(address);
 		} catch (e) {
@@ -321,5 +382,6 @@ process.on("message", (message) => {
 });
 
 process.on("disconnect", () => {
+	stopRavenna();
 	process.exit(0);
 });

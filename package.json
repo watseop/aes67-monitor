@@ -24,6 +24,7 @@
 		"bootstrap-icons": "^1.11.3",
 		"core-js": "^3.8.3",
 		"electron-store": "^8.2.0",
+		"multicast-dns": "^7.2.5",
 		"sdp-transform": "^2.15.0",
 		"vue": "^3.2.13"
 	},
