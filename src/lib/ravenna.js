@@ -222,11 +222,50 @@ function instanceName(fullName) {
  *  - queries: DNS questions to send to find the missing SRV / A records.
  */
 class ServiceTracker {
-	constructor() {
-		this.instances = new Map(); // full name -> { name, announced }
-		this.srv = new Map(); // full name (lowercase) -> { target, port }
-		this.addresses = new Map(); // host (lowercase) -> ipv4
+	constructor(now = Date.now) {
+		this.now = now;
+		// Every cached record carries `expires` (ms): RFC 6762 section 5.2 caches
+		// a record only for its TTL, so a missed announcement cannot leave an
+		// obsolete port / address in use forever.
+		this.instances = new Map(); // full name -> { name, fullName, expires }
+		this.srv = new Map(); // full name (lowercase) -> { target, port, expires }
+		this.addresses = new Map(); // host (lowercase) -> { ip, expires }
 		this.emitted = new Map(); // full name -> "ip|port|target"
+	}
+
+	// Cached SRV / A entries that are still valid.
+	liveSrv(fullKey) {
+		const srv = this.srv.get(fullKey);
+		if (srv && srv.expires <= this.now()) {
+			this.srv.delete(fullKey);
+			return undefined;
+		}
+		return srv;
+	}
+
+	liveAddress(host) {
+		const key = host.toLowerCase();
+		const a = this.addresses.get(key);
+		if (a && a.expires <= this.now()) {
+			this.addresses.delete(key);
+			return undefined;
+		}
+		return a && a.ip;
+	}
+
+	/** Drops sessions whose PTR record expired; returns [{ instance }]. */
+	sweep() {
+		const gone = [];
+		const now = this.now();
+		for (const [fullKey, inst] of this.instances) {
+			if (inst.expires <= now) {
+				this.instances.delete(fullKey);
+				this.srv.delete(fullKey);
+				this.emitted.delete(fullKey);
+				gone.push({ instance: inst.name });
+			}
+		}
+		return gone;
 	}
 
 	process(records) {
@@ -248,13 +287,16 @@ class ServiceTracker {
 				const fullKey = r.data.toLowerCase();
 				if (r.ttl === 0) {
 					if (this.instances.delete(fullKey)) {
+						this.srv.delete(fullKey);
 						this.emitted.delete(fullKey);
 						gone.push({ instance });
 					}
 				} else {
-					if (!this.instances.has(fullKey)) {
-						this.instances.set(fullKey, { name: instance, fullName: r.data });
-					}
+					this.instances.set(fullKey, {
+						name: instance,
+						fullName: r.data,
+						expires: this.now() + r.ttl * 1000,
+					});
 					touched.add(fullKey);
 				}
 			} else if (
@@ -262,12 +304,27 @@ class ServiceTracker {
 				r.data &&
 				typeof r.data.target === "string"
 			) {
-				if (r.ttl === 0) continue;
-				this.srv.set(key, { target: r.data.target, port: r.data.port });
+				if (r.ttl === 0) {
+					// Withdrawn endpoint: forget it so the next PTR asks again.
+					this.srv.delete(key);
+					this.emitted.delete(key);
+					continue;
+				}
+				this.srv.set(key, {
+					target: r.data.target,
+					port: r.data.port,
+					expires: this.now() + r.ttl * 1000,
+				});
 				touched.add(key);
 			} else if (r.type === "A" && typeof r.data === "string") {
-				if (r.ttl === 0) continue;
-				this.addresses.set(key, r.data);
+				if (r.ttl === 0) {
+					this.addresses.delete(key);
+					continue;
+				}
+				this.addresses.set(key, {
+					ip: r.data,
+					expires: this.now() + r.ttl * 1000,
+				});
 				for (const [fullKey, srv] of this.srv) {
 					if (srv.target.toLowerCase() === key) touched.add(fullKey);
 				}
@@ -278,12 +335,12 @@ class ServiceTracker {
 		for (const fullKey of touched) {
 			const inst = this.instances.get(fullKey);
 			if (!inst) continue;
-			const srv = this.srv.get(fullKey);
+			const srv = this.liveSrv(fullKey);
 			if (!srv) {
 				queries.push({ name: inst.fullName, type: "SRV" });
 				continue;
 			}
-			const ip = this.addresses.get(srv.target.toLowerCase());
+			const ip = this.liveAddress(srv.target);
 			if (!ip) {
 				queries.push({ name: srv.target, type: "A" });
 				continue;
@@ -307,8 +364,9 @@ class ServiceTracker {
 	known() {
 		const out = [];
 		for (const [fullKey, inst] of this.instances) {
-			const srv = this.srv.get(fullKey);
-			const ip = srv && this.addresses.get(srv.target.toLowerCase());
+			if (inst.expires <= this.now()) continue;
+			const srv = this.liveSrv(fullKey);
+			const ip = srv && this.liveAddress(srv.target);
 			if (srv && ip) {
 				out.push({
 					instance: inst.name,
@@ -347,8 +405,12 @@ function start({
 	const factory = mdnsFactory || require("multicast-dns");
 	const tracker = new ServiceTracker();
 	const failedUntil = new Map(); // instance -> timestamp
-	const inFlight = new Set();
+	// instance -> generation of the request in flight. A goodbye bumps the
+	// generation, so a DESCRIBE that was started before it is discarded.
+	const inFlight = new Map();
+	const generation = new Map();
 	const queue = [];
+	const currentGen = (instance) => generation.get(instance) || 0;
 	let running = 0;
 	let stopped = false;
 
@@ -382,10 +444,12 @@ function start({
 			running++;
 			describeFn(job)
 				.then((sdp) => {
+					if (job.gen !== currentGen(job.instance)) return; // withdrawn meanwhile
 					failedUntil.delete(job.instance);
 					if (!stopped) onSdp(sdp, job.instance);
 				})
 				.catch((error) => {
+					if (job.gen !== currentGen(job.instance)) return;
 					failedUntil.set(job.instance, Date.now() + FAILURE_BACKOFF_MS);
 					console.log(
 						"[RAVENNA] DESCRIBE failed for " +
@@ -396,32 +460,46 @@ function start({
 				})
 				.then(() => {
 					running--;
-					inFlight.delete(job.instance);
+					if (inFlight.get(job.instance) === job.gen) {
+						inFlight.delete(job.instance);
+					}
 					pump();
 				});
 		}
 	};
 
 	const enqueue = (job) => {
-		if (inFlight.has(job.instance)) return;
+		const gen = currentGen(job.instance);
+		if (inFlight.get(job.instance) === gen) return;
 		const until = failedUntil.get(job.instance);
 		if (until && until > Date.now()) return;
-		inFlight.add(job.instance);
-		queue.push(job);
+		inFlight.set(job.instance, gen);
+		queue.push({ ...job, gen });
 		pump();
+	};
+
+	const withdraw = (instance) => {
+		generation.set(instance, currentGen(instance) + 1);
+		failedUntil.delete(instance);
+		for (let i = queue.length - 1; i >= 0; i--) {
+			if (queue[i].instance === instance) queue.splice(i, 1);
+		}
+		inFlight.delete(instance);
+		onGone(instance);
 	};
 
 	mdns.on("response", (packet) => {
 		if (stopped) return;
 		const records = (packet.answers || []).concat(packet.additionals || []);
 		const { resolved, gone, queries } = tracker.process(records);
-		for (const g of gone) onGone(g.instance);
+		for (const g of gone) withdraw(g.instance);
 		for (const job of resolved) enqueue(job);
 		query(queries);
 	});
 
 	askForSessions();
 	const timer = setInterval(() => {
+		for (const g of tracker.sweep()) withdraw(g.instance);
 		askForSessions();
 		for (const job of tracker.known()) enqueue(job);
 	}, refreshMs);

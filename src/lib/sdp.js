@@ -115,6 +115,10 @@ const receiveSdp = function (rawSDP, del, source) {
 		.digest("hex");
 	sdp.lastSeen = Date.now();
 	sdp.manual = false;
+	// Last time each discovery source (sap / ravenna) advertised this stream, so
+	// a goodbye from one source does not remove a stream the other still announces.
+	sdp.sources = Object.assign({}, sessions[sdp.id] && sessions[sdp.id].sources);
+	sdp.sources[source] = sdp.lastSeen;
 	sdp.source = source;
 
 	if (del) {
@@ -194,11 +198,18 @@ const startRavenna = function (address) {
 			onGone: function (instance) {
 				const id = ravennaIds[instance];
 				delete ravennaIds[instance];
-				// Only remove sessions that were learned from RAVENNA, not manual ones.
-				if (id && sessions[id] && sessions[id].source === "ravenna") {
+				const session = id && sessions[id];
+				// Never remove manual sessions. Remove the stream only when no other
+				// discovery source (SAP) has announced it within the delete timeout.
+				if (!session || session.manual || !session.sources) return;
+				delete session.sources.ravenna;
+				const live = Object.values(session.sources).some(
+					(t) => Date.now() - t <= deleteTimeout
+				);
+				if (!live) {
 					delete sessions[id];
-					sendUpdate();
 				}
+				sendUpdate();
 			},
 		});
 	} catch (error) {

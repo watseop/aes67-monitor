@@ -182,8 +182,8 @@ const ptr = (data = FULL, ttl = 120, name = SESSIONS) => ({
 	ttl,
 	data,
 });
-const srv = (target = "dev.local", port = 9090) => ({
-	name: FULL,
+const srv = (target = "dev.local", port = 9090, name = FULL) => ({
+	name,
 	type: "SRV",
 	ttl: 120,
 	data: { priority: 0, weight: 0, port, target },
@@ -361,4 +361,108 @@ test("start() backs off after a failed DESCRIBE and limits parallel requests", a
 	assert.ok(!sdps.includes("Bad"));
 	assert.strictEqual(calls.Bad, 1);
 	assert.ok(calls.S0 > 1, "refresh describes working sessions again");
+});
+
+test("ServiceTracker re-asks for SRV / A after their TTL expired", () => {
+	let now = 1000;
+	const t = new ServiceTracker(() => now);
+	assert.strictEqual(t.process([ptr(), srv(), addr()]).resolved.length, 1);
+
+	// SRV (120 s default in these helpers) and A expired, PTR refreshed only.
+	now += 121 * 1000;
+	let r = t.process([ptr()]);
+	assert.deepStrictEqual(r.queries, [{ name: FULL, type: "SRV" }]);
+	assert.strictEqual(t.known().length, 0);
+
+	// The device answers with a new port: resolved again with the new endpoint.
+	r = t.process([srv("dev.local", 9191), addr()]);
+	assert.strictEqual(r.resolved.length, 1);
+	assert.strictEqual(r.resolved[0].port, 9191);
+});
+
+test("ServiceTracker forgets a withdrawn SRV / A (TTL 0) and sweeps expired PTRs", () => {
+	let now = 1000;
+	const t = new ServiceTracker(() => now);
+	t.process([ptr(), srv(), addr()]);
+	t.process([addr("10.0.0.5", "dev.local")].map((a) => ({ ...a, ttl: 0 })));
+	assert.strictEqual(t.known().length, 0);
+	assert.deepStrictEqual(t.process([ptr()]).queries, [
+		{ name: "dev.local", type: "A" },
+	]);
+
+	now += 121 * 1000;
+	assert.deepStrictEqual(t.sweep(), [{ instance: "Dev Stream-1" }]);
+	assert.deepStrictEqual(t.sweep(), []);
+});
+
+test("start() discards a DESCRIBE that finishes after the goodbye", async () => {
+	const mdns = fakeMdns();
+	const sdps = [];
+	const gone = [];
+	let release;
+	let calls = 0;
+	const handle = start({
+		interfaceAddress: "10.0.0.2",
+		onSdp: (sdp, instance) => sdps.push(instance),
+		onGone: (instance) => gone.push(instance),
+		mdnsFactory: () => mdns,
+		describeFn: () => {
+			calls++;
+			if (calls === 1) {
+				return new Promise((resolve) => {
+					release = () => resolve(SDP);
+				});
+			}
+			return Promise.resolve(SDP);
+		},
+		refreshMs: 100000,
+	});
+
+	mdns.emit("response", packet(ptr(), srv(), addr()));
+	await waitFor(() => calls === 1);
+	mdns.emit("response", packet(ptr(FULL, 0)));
+	assert.deepStrictEqual(gone, ["Dev Stream-1"]);
+
+	release();
+	await new Promise((r) => setTimeout(r, 30));
+	assert.deepStrictEqual(sdps, []); // late result must not recreate the stream
+
+	// Announced again: a fresh DESCRIBE is allowed and published.
+	mdns.emit("response", packet(ptr(), srv(), addr()));
+	await waitFor(() => sdps.length === 1);
+	handle.stop();
+});
+
+test("start() drops a queued DESCRIBE on goodbye", async () => {
+	const mdns = fakeMdns();
+	const described = [];
+	const releases = [];
+	const handle = start({
+		interfaceAddress: "10.0.0.2",
+		onSdp: () => {},
+		onGone: () => {},
+		mdnsFactory: () => mdns,
+		describeFn: (job) => {
+			described.push(job.instance);
+			return new Promise((resolve) => releases.push(() => resolve(SDP)));
+		},
+		refreshMs: 100000,
+	});
+	try {
+		// 4 run in parallel; the 5th waits in the queue and is withdrawn.
+		for (const n of ["A", "B", "C", "D", "E"]) {
+			const full = n + "._rtsp._tcp.local";
+			mdns.emit(
+				"response",
+				packet(ptr(full), srv("dev.local", 9090, full), addr())
+			);
+		}
+		await waitFor(() => described.length === 4);
+		mdns.emit("response", packet(ptr("E._rtsp._tcp.local", 0)));
+		releases.forEach((r) => r());
+		await new Promise((r) => setTimeout(r, 30));
+		assert.deepStrictEqual(described.slice().sort(), ["A", "B", "C", "D"]);
+	} finally {
+		handle.stop();
+	}
 });
